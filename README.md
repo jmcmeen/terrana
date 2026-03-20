@@ -132,6 +132,39 @@ docker compose up --build
 
 The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides.
 
+## Benchmarks
+
+Generate test datasets — simulated iNaturalist-style wildlife observations across the Southern Appalachians:
+
+```bash
+# Standard sizes (10K / 100K / 1M)
+python3 testdata/generate_benchdata.py
+
+# iNaturalist scale (250M rows, ~15 GB)
+python3 testdata/generate_250m.py
+```
+
+Run the benchmark suite:
+
+```bash
+./bench.sh 1m          # 1M rows on default port 9090
+./bench.sh 250m 8080   # 250M rows on port 8080
+./bench.sh 100k        # 100K rows, quick smoke test
+```
+
+Results on 1M rows (release build, single core):
+
+| Query | Rows | Time |
+|---|---|---|
+| Index build (1M points) | — | 199ms |
+| Nearest 10 | 10 | 11ms |
+| Radius 5km | 1,000 | 31ms |
+| Radius 10km | 1,000 | 79ms |
+| BBox 0.2° | 1,000 | 76ms |
+| Within (small polygon) | 20,522 | 119ms |
+| Geometry (area/distance/buffer) | 1 | ~5ms |
+| Schema / Stats / Health | — | ~5ms |
+
 ## License
 
 MIT
