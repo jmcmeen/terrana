@@ -12,10 +12,12 @@ pub fn build_rtree(
 ) -> Result<RTree<SpatialPoint>, AppError> {
     let start = Instant::now();
 
+    let quoted_lat = crate::db::query::quote_identifier(lat_col)?;
+    let quoted_lon = crate::db::query::quote_identifier(lon_col)?;
     let sql = format!(
         "SELECT rowid, {lat}, {lon} FROM data WHERE {lat} IS NOT NULL AND {lon} IS NOT NULL",
-        lat = lat_col,
-        lon = lon_col,
+        lat = quoted_lat,
+        lon = quoted_lon,
     );
 
     let mut stmt = conn.prepare(&sql)?;
