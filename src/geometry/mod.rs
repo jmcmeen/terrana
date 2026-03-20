@@ -1,6 +1,6 @@
-pub mod hull;
 pub mod area;
 pub mod buffer;
 pub mod dissolve;
-pub mod simplify;
+pub mod hull;
 pub mod measure;
+pub mod simplify;
