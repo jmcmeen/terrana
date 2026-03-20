@@ -46,10 +46,13 @@ pub async fn convex_hull(
         if bbox.len() != 4 {
             return Err(AppError::BadRequest("bbox must have 4 values".into()));
         }
-        let min_lat = bbox[0].as_f64().unwrap_or(0.0);
-        let min_lon = bbox[1].as_f64().unwrap_or(0.0);
-        let max_lat = bbox[2].as_f64().unwrap_or(0.0);
-        let max_lon = bbox[3].as_f64().unwrap_or(0.0);
+        let mut coords = [0.0_f64; 4];
+        for (i, coord) in coords.iter_mut().enumerate() {
+            *coord = bbox[i]
+                .as_f64()
+                .ok_or_else(|| AppError::BadRequest("bbox values must be numeric".into()))?;
+        }
+        let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
         let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
         let pts: Vec<Point<f64>> = state
@@ -207,10 +210,13 @@ pub async fn dissolve(
             .get("bbox")
             .and_then(|v| v.as_array())
             .ok_or_else(|| AppError::BadRequest("Expected query.bbox".into()))?;
-        let min_lat = bbox[0].as_f64().unwrap_or(0.0);
-        let min_lon = bbox[1].as_f64().unwrap_or(0.0);
-        let max_lat = bbox[2].as_f64().unwrap_or(0.0);
-        let max_lon = bbox[3].as_f64().unwrap_or(0.0);
+        let mut coords = [0.0_f64; 4];
+        for (i, coord) in coords.iter_mut().enumerate() {
+            *coord = bbox[i]
+                .as_f64()
+                .ok_or_else(|| AppError::BadRequest("bbox values must be numeric".into()))?;
+        }
+        let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
         let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
         let rowids: Vec<i64> = state
