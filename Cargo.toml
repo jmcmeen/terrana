@@ -1,0 +1,30 @@
+[package]
+name = "terrana"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "terrana"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+duckdb = { version = "1", features = ["bundled"] }
+rstar = "0.12"
+geo = "0.29"
+geo-types = "0.7"
+geojson = { version = "1", features = ["geo-types"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+csv = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rayon = "1"
+notify = "8"
+uuid = { version = "1", features = ["v4"] }
