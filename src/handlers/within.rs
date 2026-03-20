@@ -2,8 +2,8 @@ use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
 use axum::extract::State;
-use axum::Json;
 use axum::response::Response;
+use axum::Json;
 use geo::Contains;
 use geo_types::Polygon;
 use geojson::GeoJson;
@@ -25,7 +25,10 @@ pub async fn within(
         .map(|pt| pt.rowid)
         .collect();
 
-    let db = state.db.lock().map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
     let rows = crate::db::query::fetch_rows_by_ids(&db, &matching_rowids, None)?;
     drop(db);
 
