@@ -12,34 +12,39 @@ pub fn ingest_file(conn: &Connection, path: &Path, table: Option<&str>) -> Resul
 
     info!(ext = %extension, "ingesting file");
 
+    // Escape single quotes in the path to prevent SQL injection
+    let safe_path = path.display().to_string().replace('\'', "''");
+
     match extension.as_str() {
         "csv" => {
             conn.execute_batch(&format!(
                 "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM read_csv_auto('{}')",
-                path.display()
+                safe_path
             ))?;
         }
         "parquet" => {
             conn.execute_batch(&format!(
                 "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM read_parquet('{}')",
-                path.display()
+                safe_path
             ))?;
         }
         "geojson" | "json" => {
             conn.execute_batch("INSTALL spatial; LOAD spatial;")?;
             conn.execute_batch(&format!(
                 "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM ST_Read('{}')",
-                path.display()
+                safe_path
             ))?;
         }
         "duckdb" => {
             let tbl = table.ok_or_else(|| {
                 AppError::BadRequest("--table is required for .duckdb files".into())
             })?;
+            // Validate table name as a safe identifier
+            let safe_tbl = crate::db::query::quote_identifier(tbl)?;
             conn.execute_batch(&format!(
                 "ATTACH '{}' AS src; CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM src.{}",
-                path.display(),
-                tbl
+                safe_path,
+                safe_tbl
             ))?;
         }
         _ => {
