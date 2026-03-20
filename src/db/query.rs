@@ -2,6 +2,35 @@ use crate::error::AppError;
 use duckdb::Connection;
 use serde_json::Value;
 
+/// Validate that a string is a safe SQL identifier (column name, table name).
+/// Only allows alphanumeric chars and underscores. Returns the identifier
+/// double-quoted for safe interpolation.
+pub fn quote_identifier(name: &str) -> Result<String, AppError> {
+    if name.is_empty() {
+        return Err(AppError::BadRequest(
+            "Empty identifier not allowed".into(),
+        ));
+    }
+    // Reject anything that isn't alphanumeric/underscore
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    {
+        return Err(AppError::BadRequest(format!(
+            "Invalid identifier: '{}'. Only alphanumeric characters and underscores are allowed.",
+            name
+        )));
+    }
+    // Double-quote to handle reserved words
+    Ok(format!("\"{}\"", name))
+}
+
+/// Validate and quote a list of column names, returning comma-separated quoted identifiers.
+pub fn quote_columns(cols: &[String]) -> Result<String, AppError> {
+    let quoted: Result<Vec<String>, AppError> = cols.iter().map(|c| quote_identifier(c)).collect();
+    Ok(quoted?.join(", "))
+}
+
 /// Fetch all column metadata for the data view.
 pub fn get_columns(conn: &Connection) -> Result<Vec<(String, String)>, AppError> {
     let mut stmt = conn.prepare(
@@ -32,7 +61,7 @@ pub fn fetch_rows_by_ids(
     }
 
     let col_clause = match columns {
-        Some(cols) if !cols.is_empty() => cols.join(", "),
+        Some(cols) if !cols.is_empty() => quote_columns(cols)?,
         _ => "*".to_string(),
     };
 
@@ -55,12 +84,13 @@ pub fn fetch_all_rows(
     agg: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Value>, AppError> {
-    let col_clause = build_select_clause(select_cols, group_by, agg);
+    let col_clause = build_select_clause(select_cols, group_by, agg)?;
     let mut sql = format!("SELECT {} FROM data", col_clause);
 
     let mut conditions = Vec::new();
     for (col, val) in where_clauses {
-        conditions.push(format!("{} = '{}'", col, val.replace('\'', "''")));
+        let quoted_col = quote_identifier(col)?;
+        conditions.push(format!("{} = '{}'", quoted_col, val.replace('\'', "''")));
     }
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
@@ -68,7 +98,8 @@ pub fn fetch_all_rows(
     }
 
     if let Some(gb) = group_by {
-        sql.push_str(&format!(" GROUP BY {}", gb));
+        let quoted_gb = quote_identifier(gb)?;
+        sql.push_str(&format!(" GROUP BY {}", quoted_gb));
     }
 
     sql.push_str(&format!(" LIMIT {}", limit));
@@ -125,27 +156,32 @@ fn build_select_clause(
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
-) -> String {
+) -> Result<String, AppError> {
     match (group_by, agg) {
         (Some(gb), Some(a)) => {
+            let quoted_gb = quote_identifier(gb)?;
             let agg_expr = if a == "count" {
                 "COUNT(*) AS count".to_string()
             } else if let Some(col) = a.strip_prefix("sum:") {
-                format!("SUM({}) AS sum_{}", col, col)
+                let qc = quote_identifier(col)?;
+                format!("SUM({}) AS sum_{}", qc, col)
             } else if let Some(col) = a.strip_prefix("avg:") {
-                format!("AVG({}) AS avg_{}", col, col)
+                let qc = quote_identifier(col)?;
+                format!("AVG({}) AS avg_{}", qc, col)
             } else if let Some(col) = a.strip_prefix("min:") {
-                format!("MIN({}) AS min_{}", col, col)
+                let qc = quote_identifier(col)?;
+                format!("MIN({}) AS min_{}", qc, col)
             } else if let Some(col) = a.strip_prefix("max:") {
-                format!("MAX({}) AS max_{}", col, col)
+                let qc = quote_identifier(col)?;
+                format!("MAX({}) AS max_{}", qc, col)
             } else {
                 "COUNT(*) AS count".to_string()
             };
-            format!("{}, {}", gb, agg_expr)
+            Ok(format!("{}, {}", quoted_gb, agg_expr))
         }
         _ => match select_cols {
-            Some(cols) if !cols.is_empty() => cols.join(", "),
-            _ => "*".to_string(),
+            Some(cols) if !cols.is_empty() => quote_columns(cols),
+            _ => Ok("*".to_string()),
         },
     }
 }
