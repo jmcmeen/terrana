@@ -8,6 +8,7 @@ use geo::{Distance, Geodesic};
 use geo_types::Point;
 use rstar::AABB;
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +73,7 @@ pub async fn query(
                 (p.rowid, dist_m / 1000.0)
             })
             .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
@@ -95,7 +96,7 @@ pub async fn query(
                 .get("_distance_km")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap()
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         });
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(radius_str)) = (qp.lat, qp.lon, &qp.radius) {
@@ -122,7 +123,7 @@ pub async fn query(
                 }
             })
             .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
@@ -145,7 +146,7 @@ pub async fn query(
                 .get("_distance_km")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap()
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         });
         output::format_response(&rows, format, &state)
     } else {
@@ -260,21 +261,24 @@ fn fetch_and_filter(
 
     let placeholders: Vec<String> = rowids.iter().map(|id| id.to_string()).collect();
 
-    // Build SELECT clause
+    // Build SELECT clause with quoted identifiers
     let select_clause = if let (Some(gb), Some(a)) = (group_by, agg) {
+        let quoted_gb = db_query::quote_identifier(gb)?;
         let agg_expr = if a == "count" {
             "COUNT(*) AS count".to_string()
         } else if let Some(col) = a.strip_prefix("sum:") {
-            format!("SUM({}) AS sum_{}", col, col)
+            let qc = db_query::quote_identifier(col)?;
+            format!("SUM({}) AS sum_{}", qc, col)
         } else if let Some(col) = a.strip_prefix("avg:") {
-            format!("AVG({}) AS avg_{}", col, col)
+            let qc = db_query::quote_identifier(col)?;
+            format!("AVG({}) AS avg_{}", qc, col)
         } else {
             "COUNT(*) AS count".to_string()
         };
-        format!("{}, {}", gb, agg_expr)
+        format!("{}, {}", quoted_gb, agg_expr)
     } else {
         match select_cols {
-            Some(cols) if !cols.is_empty() => cols.join(", "),
+            Some(cols) if !cols.is_empty() => db_query::quote_columns(cols)?,
             _ => "*".to_string(),
         }
     };
@@ -282,12 +286,17 @@ fn fetch_and_filter(
     // Build WHERE clause — always include rowid filter + any user where clauses
     let mut where_parts = vec![format!("rowid IN ({})", placeholders.join(", "))];
     for (col, val) in where_clauses {
-        where_parts.push(format!("{} = '{}'", col, val.replace('\'', "''")));
+        let quoted_col = db_query::quote_identifier(col)?;
+        where_parts.push(format!("{} = '{}'", quoted_col, val.replace('\'', "''")));
     }
 
-    let group_clause = group_by
-        .map(|gb| format!(" GROUP BY {}", gb))
-        .unwrap_or_default();
+    let group_clause = match group_by {
+        Some(gb) => {
+            let quoted_gb = db_query::quote_identifier(gb)?;
+            format!(" GROUP BY {}", quoted_gb)
+        }
+        None => String::new(),
+    };
 
     let sql = format!(
         "SELECT {} FROM data WHERE {}{} LIMIT {}",
