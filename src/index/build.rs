@@ -5,7 +5,11 @@ use rstar::RTree;
 use std::time::Instant;
 use tracing::info;
 
-pub fn build_rtree(conn: &Connection, lat_col: &str, lon_col: &str) -> Result<RTree<SpatialPoint>, AppError> {
+pub fn build_rtree(
+    conn: &Connection,
+    lat_col: &str,
+    lon_col: &str,
+) -> Result<RTree<SpatialPoint>, AppError> {
     let start = Instant::now();
 
     let sql = format!(
