@@ -50,15 +50,23 @@ pub fn ingest_file(conn: &Connection, path: &Path, table: Option<&str>) -> Resul
         }
     }
 
-    let row_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))?;
+    let row_count: i64 = conn.query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))?;
     info!(rows = row_count, "file ingested");
 
     Ok(())
 }
 
 const LAT_CANDIDATES: &[&str] = &["latitude", "lat", "y", "ylat", "geo_lat"];
-const LON_CANDIDATES: &[&str] = &["longitude", "lon", "lng", "x", "xlon", "xlong", "geo_lon", "geo_lng"];
+const LON_CANDIDATES: &[&str] = &[
+    "longitude",
+    "lon",
+    "lng",
+    "x",
+    "xlon",
+    "xlong",
+    "geo_lon",
+    "geo_lng",
+];
 
 pub fn detect_lat_lon(
     conn: &Connection,
