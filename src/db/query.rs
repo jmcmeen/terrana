@@ -101,11 +101,11 @@ pub fn execute_query_to_json(conn: &Connection, sql: &str) -> Result<Vec<Value>,
 
 /// Get column names for a query by creating a temp view and inspecting it.
 fn get_query_column_names(conn: &Connection, sql: &str) -> Result<Vec<String>, AppError> {
-    let view_name = format!("_col_inspect_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-    conn.execute_batch(&format!(
-        "CREATE TEMPORARY VIEW {} AS {}",
-        view_name, sql
-    ))?;
+    let view_name = format!(
+        "_col_inspect_{}",
+        uuid::Uuid::new_v4().to_string().replace('-', "")
+    );
+    conn.execute_batch(&format!("CREATE TEMPORARY VIEW {} AS {}", view_name, sql))?;
 
     let mut stmt = conn.prepare(&format!(
         "SELECT column_name FROM information_schema.columns WHERE table_name = '{}' ORDER BY ordinal_position",
@@ -178,18 +178,14 @@ fn duckdb_val_to_json(dv: duckdb::types::Value) -> Value {
         DV::Double(v) => serde_json::Number::from_f64(v)
             .map(Value::Number)
             .unwrap_or(Value::Null),
-        DV::Decimal(d) => {
-            Value::String(d.to_string())
-        }
+        DV::Decimal(d) => Value::String(d.to_string()),
         DV::Text(s) => Value::String(s),
         DV::Blob(b) => Value::String(format!("<blob {} bytes>", b.len())),
         DV::Timestamp(_, micros) => {
             // Convert microseconds since epoch to ISO string
             let secs = micros / 1_000_000;
             let nsecs = ((micros % 1_000_000) * 1000) as u32;
-            Value::String(format!("{}",
-                chrono_from_epoch(secs, nsecs)
-            ))
+            Value::String(chrono_from_epoch(secs, nsecs))
         }
         DV::Date32(days) => {
             // Days since Unix epoch
@@ -197,21 +193,19 @@ fn duckdb_val_to_json(dv: duckdb::types::Value) -> Value {
             Value::String(date)
         }
         DV::Time64(_, v) => Value::String(format!("{}", v)),
-        DV::Interval { months, days, nanos } => {
-            Value::String(format!("{}m{}d{}ns", months, days, nanos))
-        }
+        DV::Interval {
+            months,
+            days,
+            nanos,
+        } => Value::String(format!("{}m{}d{}ns", months, days, nanos)),
         DV::List(items) => {
             let arr: Vec<Value> = items.into_iter().map(duckdb_val_to_json).collect();
             Value::Array(arr)
         }
         DV::Enum(s) => Value::String(s),
-        DV::Struct(_fields) => {
-            Value::String("<struct>".to_string())
-        }
+        DV::Struct(_fields) => Value::String("<struct>".to_string()),
         DV::Union(v) => duckdb_val_to_json(*v),
-        DV::Map(_m) => {
-            Value::String("<map>".to_string())
-        }
+        DV::Map(_m) => Value::String("<map>".to_string()),
         DV::Array(items) => {
             let arr: Vec<Value> = items.into_iter().map(duckdb_val_to_json).collect();
             Value::Array(arr)
