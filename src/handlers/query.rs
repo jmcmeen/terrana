@@ -50,7 +50,15 @@ pub async fn query(
             .map(|p| p.rowid)
             .collect();
 
-        let rows = fetch_and_filter(&state, &candidates, &where_clauses, select_cols.as_deref(), qp.group_by.as_deref(), qp.agg.as_deref(), limit)?;
+        let rows = fetch_and_filter(
+            &state,
+            &candidates,
+            &where_clauses,
+            select_cols.as_deref(),
+            qp.group_by.as_deref(),
+            qp.agg.as_deref(),
+            limit,
+        )?;
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(nearest)) = (qp.lat, qp.lon, qp.nearest) {
         // Nearest neighbor query
@@ -68,11 +76,25 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(&state, &rowids, &where_clauses, select_cols.as_deref(), qp.group_by.as_deref(), qp.agg.as_deref(), limit)?;
+        let mut rows = fetch_and_filter(
+            &state,
+            &rowids,
+            &where_clauses,
+            select_cols.as_deref(),
+            qp.group_by.as_deref(),
+            qp.agg.as_deref(),
+            limit,
+        )?;
         inject_distances(&mut rows, &distances);
         rows.sort_by(|a, b| {
-            let da = a.get("_distance_km").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
-            let db = b.get("_distance_km").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+            let da = a
+                .get("_distance_km")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::MAX);
+            let db = b
+                .get("_distance_km")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::MAX);
             da.partial_cmp(&db).unwrap()
         });
         output::format_response(&rows, format, &state)
@@ -104,17 +126,34 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(&state, &rowids, &where_clauses, select_cols.as_deref(), qp.group_by.as_deref(), qp.agg.as_deref(), limit)?;
+        let mut rows = fetch_and_filter(
+            &state,
+            &rowids,
+            &where_clauses,
+            select_cols.as_deref(),
+            qp.group_by.as_deref(),
+            qp.agg.as_deref(),
+            limit,
+        )?;
         inject_distances(&mut rows, &distances);
         rows.sort_by(|a, b| {
-            let da = a.get("_distance_km").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
-            let db = b.get("_distance_km").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+            let da = a
+                .get("_distance_km")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::MAX);
+            let db = b
+                .get("_distance_km")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::MAX);
             da.partial_cmp(&db).unwrap()
         });
         output::format_response(&rows, format, &state)
     } else {
         // No spatial filter — plain table query
-        let db = state.db.lock().map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
         let rows = db_query::fetch_all_rows(
             &db,
             &where_clauses,
@@ -148,9 +187,15 @@ fn parse_bbox(s: &str) -> Result<(f64, f64, f64, f64), AppError> {
         .split(',')
         .map(|p| p.trim().parse::<f64>())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| AppError::BadRequest("Invalid bbox format. Expected: minlat,minlon,maxlat,maxlon".into()))?;
+        .map_err(|_| {
+            AppError::BadRequest(
+                "Invalid bbox format. Expected: minlat,minlon,maxlat,maxlon".into(),
+            )
+        })?;
     if parts.len() != 4 {
-        return Err(AppError::BadRequest("bbox requires exactly 4 values: minlat,minlon,maxlat,maxlon".into()));
+        return Err(AppError::BadRequest(
+            "bbox requires exactly 4 values: minlat,minlon,maxlat,maxlon".into(),
+        ));
     }
     Ok((parts[0], parts[1], parts[2], parts[3]))
 }
@@ -169,7 +214,12 @@ fn parse_radius(s: &str) -> Result<f64, AppError> {
         // Default to meters
         s.parse::<f64>()
     }
-    .map_err(|_| AppError::BadRequest(format!("Invalid radius: '{}'. Use e.g. 10km, 5000m, 3mi", s)))
+    .map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid radius: '{}'. Use e.g. 10km, 5000m, 3mi",
+            s
+        ))
+    })
 }
 
 fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
@@ -203,7 +253,10 @@ fn fetch_and_filter(
         return Ok(vec![]);
     }
 
-    let db = state.db.lock().map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
 
     let placeholders: Vec<String> = rowids.iter().map(|id| id.to_string()).collect();
 
@@ -232,7 +285,9 @@ fn fetch_and_filter(
         where_parts.push(format!("{} = '{}'", col, val.replace('\'', "''")));
     }
 
-    let group_clause = group_by.map(|gb| format!(" GROUP BY {}", gb)).unwrap_or_default();
+    let group_clause = group_by
+        .map(|gb| format!(" GROUP BY {}", gb))
+        .unwrap_or_default();
 
     let sql = format!(
         "SELECT {} FROM data WHERE {}{} LIMIT {}",
