@@ -120,6 +120,18 @@ curl -X POST localhost:8080/geometry/distance \
   -d '{"from":{"type":"Point","coordinates":[-82.54,36.54]},"to":{"type":"Point","coordinates":[-82.55,36.55]}}'
 ```
 
+## Docker
+
+```bash
+# Drop a CSV into ./data/ and start the server
+mkdir -p data
+cp your-observations.csv data/observations.csv
+docker compose up --build
+# → http://localhost:8080
+```
+
+The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides.
+
 ## License
 
 MIT

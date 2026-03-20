@@ -1,0 +1,6 @@
+target/
+.git/
+.github/
+testdata/
+*.md
+!README.md
