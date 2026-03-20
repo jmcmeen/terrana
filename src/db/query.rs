@@ -7,9 +7,7 @@ use serde_json::Value;
 /// double-quoted for safe interpolation.
 pub fn quote_identifier(name: &str) -> Result<String, AppError> {
     if name.is_empty() {
-        return Err(AppError::BadRequest(
-            "Empty identifier not allowed".into(),
-        ));
+        return Err(AppError::BadRequest("Empty identifier not allowed".into()));
     }
     // Reject anything that isn't alphanumeric/underscore
     if !name
