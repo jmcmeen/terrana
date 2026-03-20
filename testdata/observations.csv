@@ -1,0 +1,21 @@
+id,species,observed_on,quality_grade,latitude,longitude,count
+1,Eastern Bluebird,2024-03-15,research,36.5400,-82.5500,3
+2,Carolina Chickadee,2024-03-15,research,36.5450,-82.5400,5
+3,White-tailed Deer,2024-03-16,casual,36.5500,-82.5300,2
+4,Red-tailed Hawk,2024-03-16,research,36.5350,-82.5600,1
+5,American Goldfinch,2024-03-17,research,36.5480,-82.5450,8
+6,Wild Turkey,2024-03-17,casual,36.5600,-82.5200,4
+7,Eastern Box Turtle,2024-03-18,research,36.5250,-82.5700,1
+8,Black Bear,2024-03-18,needs_id,36.5700,-82.5100,1
+9,Barred Owl,2024-03-19,research,36.5300,-82.5550,2
+10,Timber Rattlesnake,2024-03-19,research,36.5150,-82.5800,1
+11,White-breasted Nuthatch,2024-03-20,research,36.5420,-82.5420,4
+12,Pileated Woodpecker,2024-03-20,research,36.5380,-82.5480,2
+13,Eastern Chipmunk,2024-03-21,casual,36.5520,-82.5350,6
+14,Peregrine Falcon,2024-03-21,research,36.5100,-82.5900,1
+15,Northern Cardinal,2024-03-22,research,36.5460,-82.5380,7
+16,Copperhead,2024-03-22,needs_id,36.5200,-82.5750,1
+17,Great Blue Heron,2024-03-23,research,36.5550,-82.5250,2
+18,River Otter,2024-03-23,casual,36.5650,-82.5150,3
+19,Scarlet Tanager,2024-03-24,research,36.5320,-82.5520,2
+20,Whitetail Buck,2024-03-24,casual,36.5580,-82.5280,1
