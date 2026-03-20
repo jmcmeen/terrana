@@ -3,7 +3,7 @@ use crate::server::AppState;
 use axum::extract::State;
 use axum::Json;
 use geo::{
-    Bearing, BoundingRect, Centroid, ConvexHull, Destination, Distance, GeodesicArea, Geodesic,
+    Bearing, BoundingRect, Centroid, ConvexHull, Destination, Distance, Geodesic, GeodesicArea,
     Simplify, SimplifyVw,
 };
 use geo_types::{LineString, Point, Polygon};
@@ -134,20 +134,14 @@ pub async fn buffer(
         .get("distance")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AppError::BadRequest("Missing 'distance' field".into()))?;
-    let unit = body
-        .get("unit")
-        .and_then(|v| v.as_str())
-        .unwrap_or("m");
-    let segments = body
-        .get("segments")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(64) as usize;
+    let unit = body.get("unit").and_then(|v| v.as_str()).unwrap_or("m");
+    let segments = body.get("segments").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
 
     let distance_m = match unit {
         "km" => distance * 1000.0,
         "mi" => distance * 1609.344,
         "ft" => distance * 0.3048,
-        "m" | _ => distance,
+        _ => distance,
     };
 
     let geojson: geojson::Geometry = serde_json::from_value(geom_val.clone())
@@ -225,17 +219,24 @@ pub async fn dissolve(
             .map(|p| p.rowid)
             .collect();
 
-        let db = state.db.lock().map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
         crate::db::query::fetch_rows_by_ids(&db, &rowids, None)?
     } else {
-        let db = state.db.lock().map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
         crate::db::query::fetch_all_rows(&db, &[], None, None, None, 100_000)?
     };
 
     // Group by attribute
     let lat_col = &state.schema.lat_col;
     let lon_col = &state.schema.lon_col;
-    let mut groups: std::collections::HashMap<String, Vec<Point<f64>>> = std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<String, Vec<Point<f64>>> =
+        std::collections::HashMap::new();
 
     for row in &points_with_data {
         let key = row
@@ -473,7 +474,11 @@ fn collect_polygons(
     match geo_geom {
         geo_types::Geometry::Polygon(p) => polygons.push(p),
         geo_types::Geometry::MultiPolygon(mp) => polygons.extend(mp.0),
-        _ => return Err(AppError::BadRequest("Expected Polygon or MultiPolygon".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "Expected Polygon or MultiPolygon".into(),
+            ))
+        }
     }
     Ok(())
 }
@@ -502,10 +507,10 @@ fn extract_points_from_body(body: &Value) -> Result<Vec<Point<f64>>, AppError> {
         geojson::GeoJson::FeatureCollection(fc) => {
             for f in fc.features {
                 if let Some(g) = f.geometry {
-                    if let Ok(geo_geom) = TryInto::<geo_types::Geometry<f64>>::try_into(g) {
-                        if let geo_types::Geometry::Point(p) = geo_geom {
-                            points.push(p);
-                        }
+                    if let Ok(geo_types::Geometry::Point(p)) =
+                        TryInto::<geo_types::Geometry<f64>>::try_into(g)
+                    {
+                        points.push(p);
                     }
                 }
             }
