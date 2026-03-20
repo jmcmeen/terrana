@@ -19,3 +19,22 @@ All notable changes to Terrana will be documented in this file.
 - `GET /health`, `GET /schema`, `GET /stats` metadata endpoints
 - CORS support and request tracing via tower-http
 - Tracing/logging with `RUST_LOG` env filter
+- GitHub Actions CI (check, clippy, fmt, cross-platform build) and release workflows
+- Dockerfile and docker-compose.yml for containerized deployment
+- MIT License
+
+### Security
+
+- SQL identifier validation and quoting for all user-supplied column names, group_by, agg, and select params
+- File path escaping in DuckDB SQL statements to prevent injection via paths with quotes
+- Table name validation for .duckdb file ingestion
+
+### Fixed
+
+- Empty R-tree no longer panics in `/stats` endpoint
+- Invalid bbox coordinate values now return 400 instead of silently defaulting to 0.0
+- NaN-safe sorting in radius and nearest-neighbor queries (no more panic on degenerate coordinates)
+
+### Improved
+
+- `/query/within` uses R-tree envelope pre-filtering before precise point-in-polygon tests
