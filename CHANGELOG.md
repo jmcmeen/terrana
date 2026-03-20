@@ -6,9 +6,9 @@ All notable changes to Terrana will be documented in this file.
 
 ### Added
 
-- CLI with `terrana serve` subcommand and `--lat`, `--lon`, `--table`, `--port`, `--bind`, `--watch` options
+- CLI with `terrana serve` subcommand and `--lat`, `--lon`, `--port`, `--bind`, `--watch` options
 - Auto-detection of lat/lon columns from common naming conventions
-- DuckDB-based file ingestion for CSV, Parquet, GeoJSON, and .duckdb files
+- In-memory file ingestion for CSV and GeoJSON
 - R-tree spatial index (rstar) with bulk loading
 - `GET /query` endpoint with radius, bounding box, and nearest neighbor modes
 - `POST /query/within` for point-in-polygon queries
@@ -25,9 +25,7 @@ All notable changes to Terrana will be documented in this file.
 
 ### Security
 
-- SQL identifier validation and quoting for all user-supplied column names, group_by, agg, and select params
-- File path escaping in DuckDB SQL statements to prevent injection via paths with quotes
-- Table name validation for .duckdb file ingestion
+- Column name validation for all user-supplied column names, group_by, agg, and select params
 
 ### Fixed
 

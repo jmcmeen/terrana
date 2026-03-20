@@ -1,7 +1,7 @@
-use crate::db::query as db_query;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
+use crate::store;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use geo::{Distance, Geodesic};
@@ -37,7 +37,19 @@ pub async fn query(
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
-    // Determine query type
+    // Validate column names in where clauses and select
+    for (col, _) in &where_clauses {
+        store::validate_column_name(col)?;
+    }
+    if let Some(ref cols) = select_cols {
+        for col in cols {
+            store::validate_column_name(col)?;
+        }
+    }
+    if let Some(ref gb) = qp.group_by {
+        store::validate_column_name(gb)?;
+    }
+
     if let Some(bbox_str) = &qp.bbox {
         // Bounding box query
         let bbox = parse_bbox(bbox_str)?;
@@ -51,9 +63,8 @@ pub async fn query(
             .map(|p| p.rowid)
             .collect();
 
-        let rows = fetch_and_filter(
-            &state,
-            &candidates,
+        let rows = state.table.query(
+            Some(&candidates),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -77,9 +88,8 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(
-            &state,
-            &rowids,
+        let mut rows = state.table.query(
+            Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -104,7 +114,6 @@ pub async fn query(
         let radius_m = parse_radius(radius_str)?;
         let origin = Point::new(lon, lat);
 
-        // Expand envelope by approximate degree offset
         let deg_offset = radius_m / 111_000.0 * 1.5; // generous buffer
         let envelope = AABB::from_corners(
             [lon - deg_offset, lat - deg_offset],
@@ -127,9 +136,8 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(
-            &state,
-            &rowids,
+        let mut rows = state.table.query(
+            Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -151,12 +159,8 @@ pub async fn query(
         output::format_response(&rows, format, &state)
     } else {
         // No spatial filter — plain table query
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-        let rows = db_query::fetch_all_rows(
-            &db,
+        let rows = state.table.query(
+            None,
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -212,7 +216,6 @@ fn parse_radius(s: &str) -> Result<f64, AppError> {
     } else if let Some(val) = s.strip_suffix('m') {
         val.trim().parse::<f64>()
     } else {
-        // Default to meters
         s.parse::<f64>()
     }
     .map_err(|_| {
@@ -239,74 +242,6 @@ fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
 
 fn parse_select(select: Option<&str>) -> Option<Vec<String>> {
     select.map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
-}
-
-fn fetch_and_filter(
-    state: &AppState,
-    rowids: &[i64],
-    where_clauses: &[(String, String)],
-    select_cols: Option<&[String]>,
-    group_by: Option<&str>,
-    agg: Option<&str>,
-    limit: usize,
-) -> Result<Vec<serde_json::Value>, AppError> {
-    if rowids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-
-    let placeholders: Vec<String> = rowids.iter().map(|id| id.to_string()).collect();
-
-    // Build SELECT clause with quoted identifiers
-    let select_clause = if let (Some(gb), Some(a)) = (group_by, agg) {
-        let quoted_gb = db_query::quote_identifier(gb)?;
-        let agg_expr = if a == "count" {
-            "COUNT(*) AS count".to_string()
-        } else if let Some(col) = a.strip_prefix("sum:") {
-            let qc = db_query::quote_identifier(col)?;
-            format!("SUM({}) AS sum_{}", qc, col)
-        } else if let Some(col) = a.strip_prefix("avg:") {
-            let qc = db_query::quote_identifier(col)?;
-            format!("AVG({}) AS avg_{}", qc, col)
-        } else {
-            "COUNT(*) AS count".to_string()
-        };
-        format!("{}, {}", quoted_gb, agg_expr)
-    } else {
-        match select_cols {
-            Some(cols) if !cols.is_empty() => db_query::quote_columns(cols)?,
-            _ => "*".to_string(),
-        }
-    };
-
-    // Build WHERE clause — always include rowid filter + any user where clauses
-    let mut where_parts = vec![format!("rowid IN ({})", placeholders.join(", "))];
-    for (col, val) in where_clauses {
-        let quoted_col = db_query::quote_identifier(col)?;
-        where_parts.push(format!("{} = '{}'", quoted_col, val.replace('\'', "''")));
-    }
-
-    let group_clause = match group_by {
-        Some(gb) => {
-            let quoted_gb = db_query::quote_identifier(gb)?;
-            format!(" GROUP BY {}", quoted_gb)
-        }
-        None => String::new(),
-    };
-
-    let sql = format!(
-        "SELECT {} FROM data WHERE {}{} LIMIT {}",
-        select_clause,
-        where_parts.join(" AND "),
-        group_clause,
-        limit
-    );
-
-    db_query::execute_query_to_json(&db, &sql)
 }
 
 fn inject_distances(rows: &mut [serde_json::Value], distances: &HashMap<i64, f64>) {

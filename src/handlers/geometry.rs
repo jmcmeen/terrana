@@ -38,7 +38,6 @@ pub async fn convex_hull(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let points = if let Some(query) = body.get("query") {
-        // Build from spatial query
         let bbox = query
             .get("bbox")
             .and_then(|v| v.as_array())
@@ -62,7 +61,6 @@ pub async fn convex_hull(
             .collect();
         pts
     } else {
-        // Build from GeoJSON features
         extract_points_from_body(&body)?
     };
 
@@ -157,7 +155,6 @@ pub async fn buffer(
         .centroid()
         .ok_or_else(|| AppError::Geometry("Cannot compute centroid for buffer".into()))?;
 
-    // Build buffer ring by shooting rays at each bearing
     let mut coords = Vec::with_capacity(segments + 1);
     for i in 0..segments {
         let bearing = (i as f64) * 360.0 / (segments as f64);
@@ -167,7 +164,7 @@ pub async fn buffer(
             y: dest.y(),
         });
     }
-    coords.push(coords[0]); // close the ring
+    coords.push(coords[0]);
 
     let ring = LineString::from(coords);
     let poly = Polygon::new(ring, vec![]);
@@ -204,7 +201,6 @@ pub async fn dissolve(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Get points from query or all
     let points_with_data = if let Some(query) = body.get("query") {
         let bbox = query
             .get("bbox")
@@ -225,20 +221,11 @@ pub async fn dissolve(
             .map(|p| p.rowid)
             .collect();
 
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-        crate::db::query::fetch_rows_by_ids(&db, &rowids, None)?
+        state.table.get_rows_by_ids(&rowids)
     } else {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-        crate::db::query::fetch_all_rows(&db, &[], None, None, None, 100_000)?
+        state.table.query(None, &[], None, None, None, 100_000)?
     };
 
-    // Group by attribute
     let lat_col = &state.schema.lat_col;
     let lon_col = &state.schema.lon_col;
     let mut groups: std::collections::HashMap<String, Vec<Point<f64>>> =
@@ -261,7 +248,6 @@ pub async fn dissolve(
         }
     }
 
-    // Build hull per group
     let mut features = Vec::new();
     for (key, pts) in &groups {
         if pts.len() < 3 {
@@ -406,7 +392,6 @@ pub async fn bounds(
     let max_lat = rect.max().y;
     let max_lon = rect.max().x;
 
-    // Compute width/height in km using geodesic distance
     let width_m = Geodesic::distance(Point::new(min_lon, min_lat), Point::new(max_lon, min_lat));
     let height_m = Geodesic::distance(Point::new(min_lon, min_lat), Point::new(min_lon, max_lat));
 
@@ -435,7 +420,6 @@ pub async fn bounds(
 // --- Helpers ---
 
 fn extract_polygons_from_body(body: &Value) -> Result<Vec<Polygon<f64>>, AppError> {
-    // Support both {"geometry": <GeoJSON>} wrapper and direct GeoJSON
     let geojson_val = if let Some(geom) = body.get("geometry") {
         geom.to_string()
     } else {

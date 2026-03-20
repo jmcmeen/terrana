@@ -1,18 +1,17 @@
 mod cli;
 mod config;
-mod db;
 mod error;
-mod geometry;
 mod handlers;
 mod index;
 mod output;
 mod server;
+mod store;
 
 use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
 use server::{AppState, ColumnMeta, TableSchema};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -32,7 +31,6 @@ async fn main() -> anyhow::Result<()> {
             file,
             lat,
             lon,
-            table,
             port,
             bind,
             watch,
@@ -41,7 +39,6 @@ async fn main() -> anyhow::Result<()> {
                 file: file.clone(),
                 lat_col: lat.clone(),
                 lon_col: lon.clone(),
-                table: table.clone(),
                 port,
                 bind: bind.clone(),
                 watch,
@@ -50,45 +47,42 @@ async fn main() -> anyhow::Result<()> {
             info!("terrana v{}", env!("CARGO_PKG_VERSION"));
             info!("source: {}", file.display());
 
-            // Verify file exists
             if !file.exists() {
                 anyhow::bail!("File not found: {}", file.display());
             }
 
-            // Set up DuckDB
-            let conn = db::create_connection()?;
+            // Load file into memory
             let abs_path = std::fs::canonicalize(&file)?;
-            db::loader::ingest_file(&conn, &abs_path, table.as_deref())?;
+            let data_table = store::loader::load_file(&abs_path)?;
 
             // Detect lat/lon columns
             let (lat_col, lon_col) =
-                db::loader::detect_lat_lon(&conn, lat.as_deref(), lon.as_deref())?;
+                store::loader::detect_lat_lon(&data_table, lat.as_deref(), lon.as_deref())?;
             info!(lat = %lat_col, lon = %lon_col, "columns detected");
-
-            // Get schema info
-            let columns_meta = db::query::get_columns(&conn)?;
-            let row_count = db::query::row_count(&conn)?;
-            info!(rows = row_count, "data loaded");
 
             // Build R-tree index
             let start_build = Instant::now();
-            let tree = index::build::build_rtree(&conn, &lat_col, &lon_col)?;
+            let tree = index::build::build_rtree(&data_table, &lat_col, &lon_col);
             let index_build_ms = start_build.elapsed().as_millis();
 
             let schema = TableSchema {
                 source: file.display().to_string(),
-                row_count,
+                row_count: data_table.row_count,
                 lat_col,
                 lon_col,
-                columns: columns_meta
-                    .into_iter()
-                    .map(|(name, dtype)| ColumnMeta { name, dtype })
+                columns: data_table
+                    .columns
+                    .iter()
+                    .map(|(name, dtype)| ColumnMeta {
+                        name: name.clone(),
+                        dtype: dtype.clone(),
+                    })
                     .collect(),
             };
 
             let state = AppState {
                 config: Arc::new(config),
-                db: Arc::new(Mutex::new(conn)),
+                table: Arc::new(data_table),
                 index: Arc::new(tree),
                 schema: Arc::new(schema),
                 start_time: Instant::now(),

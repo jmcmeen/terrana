@@ -12,7 +12,7 @@ pub struct Cli {
 pub enum Commands {
     /// Start the spatial API server for a data file
     Serve {
-        /// Path to CSV, Parquet, GeoJSON, or .duckdb file
+        /// Path to CSV or GeoJSON file
         file: PathBuf,
 
         /// Latitude column name [auto-detected if omitted]
@@ -22,10 +22,6 @@ pub enum Commands {
         /// Longitude column name [auto-detected if omitted]
         #[arg(long)]
         lon: Option<String>,
-
-        /// Table name (DuckDB files only)
-        #[arg(long)]
-        table: Option<String>,
 
         /// HTTP port
         #[arg(long, default_value = "8080")]

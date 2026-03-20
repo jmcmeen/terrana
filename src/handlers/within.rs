@@ -15,7 +15,6 @@ pub async fn within(
 ) -> Result<Response, AppError> {
     let polygons = extract_polygons(&body)?;
 
-    // Compute combined bounding box of all polygons for R-tree pre-filtering
     let mut min_lon = f64::MAX;
     let mut min_lat = f64::MAX;
     let mut max_lon = f64::MIN;
@@ -30,7 +29,6 @@ pub async fn within(
     }
     let envelope = AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
-    // Pre-filter with R-tree envelope, then test precise containment
     let matching_rowids: Vec<i64> = state
         .index
         .locate_in_envelope(&envelope)
@@ -41,12 +39,7 @@ pub async fn within(
         .map(|pt| pt.rowid)
         .collect();
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-    let rows = crate::db::query::fetch_rows_by_ids(&db, &matching_rowids, None)?;
-    drop(db);
+    let rows = state.table.get_rows_by_ids(&matching_rowids);
 
     output::format_response(&rows, "json", &state)
 }

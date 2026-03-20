@@ -3,11 +3,11 @@ pub mod middleware;
 use crate::config::Config;
 use crate::handlers;
 use crate::index::SpatialPoint;
+use crate::store::DataTable;
 use axum::Router;
-use duckdb::Connection;
 use rstar::RTree;
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 #[allow(dead_code)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub db: Arc<Mutex<Connection>>,
+    pub table: Arc<DataTable>,
     pub index: Arc<RTree<SpatialPoint>>,
     pub schema: Arc<TableSchema>,
     pub start_time: Instant,
