@@ -20,13 +20,20 @@ pub async fn within(
     let mut min_lat = f64::MAX;
     let mut max_lon = f64::MIN;
     let mut max_lat = f64::MIN;
+    let mut has_bounds = false;
     for poly in &polygons {
         if let Some(rect) = poly.bounding_rect() {
             min_lon = min_lon.min(rect.min().x);
             min_lat = min_lat.min(rect.min().y);
             max_lon = max_lon.max(rect.max().x);
             max_lat = max_lat.max(rect.max().y);
+            has_bounds = true;
         }
+    }
+    if !has_bounds {
+        return Err(AppError::BadRequest(
+            "Could not compute bounding box for the provided polygons".into(),
+        ));
     }
     let envelope = AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
