@@ -201,7 +201,3 @@ cargo run -- serve testdata/observations.csv
 ```
 
 Please run `cargo fmt` and `cargo clippy` before submitting a PR.
-
-## License
-
-MIT
