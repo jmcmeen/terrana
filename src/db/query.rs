@@ -6,55 +6,52 @@ use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
-// --- Spatial SQL helpers (plain SQL, no spatial extension) ---
+// --- Spatial SQL helpers ---
 
-/// Build a WHERE fragment for bounding box queries on lat/lon columns.
-pub fn bbox_filter(lat_col: &str, lon_col: &str, min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
+/// Build a WHERE fragment for bounding box queries using ST_Intersects (R-tree accelerated).
+pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
     format!(
-        "\"{}\" BETWEEN {} AND {} AND \"{}\" BETWEEN {} AND {}",
-        lat_col, min_lat, max_lat, lon_col, min_lon, max_lon
+        "ST_Intersects(geom, ST_MakeEnvelope({}, {}, {}, {}))",
+        min_lon, min_lat, max_lon, max_lat
     )
 }
 
-/// Build a WHERE fragment for radius queries: bbox pre-filter + haversine distance check.
-pub fn radius_filter(lat_col: &str, lon_col: &str, lat: f64, lon: f64, radius_m: f64) -> String {
+/// Build a WHERE fragment for radius queries: bbox envelope + haversine distance check.
+pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
     let deg_offset = radius_m / 111_000.0 * 1.5;
-    let bbox = bbox_filter(lat_col, lon_col, lat - deg_offset, lon - deg_offset, lat + deg_offset, lon + deg_offset);
+    let bbox = bbox_filter(
+        lat - deg_offset,
+        lon - deg_offset,
+        lat + deg_offset,
+        lon + deg_offset,
+    );
     format!(
-        "{bbox} AND {haversine} <= {radius_m}",
-        bbox = bbox,
-        haversine = haversine_sql(lat_col, lon_col, lat, lon),
-        radius_m = radius_m,
+        "{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
+        bbox, lon, lat, radius_m
     )
 }
 
-/// Build a SELECT expression for haversine distance in km.
-pub fn distance_select(lat_col: &str, lon_col: &str, lat: f64, lon: f64) -> String {
+/// Build a SELECT expression for distance in km (haversine).
+pub fn distance_select(lat: f64, lon: f64) -> String {
     format!(
-        "{} / 1000.0 AS _distance_km",
-        haversine_sql(lat_col, lon_col, lat, lon)
+        "ST_Distance_Sphere(geom, ST_Point({}, {})) / 1000.0 AS _distance_km",
+        lon, lat
     )
 }
 
-/// Haversine distance formula in SQL, returns meters.
-fn haversine_sql(lat_col: &str, lon_col: &str, lat: f64, lon: f64) -> String {
-    // 2 * 6371000 * asin(sqrt(sin²(Δlat/2) + cos(lat1)*cos(lat2)*sin²(Δlon/2)))
+/// Build a WHERE fragment for point-in-polygon using ST_Contains (R-tree accelerated).
+pub fn within_filter_geojson(geojson_str: &str) -> String {
     format!(
-        "2 * 6371000.0 * ASIN(SQRT(\
-            POWER(SIN(RADIANS(\"{lat_col}\" - {lat}) / 2), 2) + \
-            COS(RADIANS({lat})) * COS(RADIANS(\"{lat_col}\")) * \
-            POWER(SIN(RADIANS(\"{lon_col}\" - {lon}) / 2), 2)\
-        ))",
-        lat_col = lat_col,
-        lon_col = lon_col,
-        lat = lat,
-        lon = lon,
+        "ST_Contains(ST_GeomFromGeoJSON('{}'), geom)",
+        geojson_str.replace('\'', "''")
     )
 }
 
 // --- Query functions ---
 
 /// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
+/// When `spatial_where` is provided, queries `raw_data` (which has the geom column + R-tree index)
+/// and excludes the geom column from output. Otherwise queries the `data` view.
 pub fn query(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
@@ -72,6 +69,8 @@ pub fn query(
         return query_aggregate(db, spatial_where, where_clauses, gb, a, limit);
     }
 
+    let table = if spatial_where.is_some() { "raw_data" } else { "data" };
+
     let select = match select_cols {
         Some(cols) => {
             for c in cols {
@@ -85,16 +84,25 @@ pub fn query(
             s
         }
         None => {
-            let mut s = String::from("*");
-            if let Some(extra) = extra_select {
-                s.push_str(", ");
-                s.push_str(extra);
+            if spatial_where.is_some() {
+                let mut s = String::from("* EXCLUDE (geom)");
+                if let Some(extra) = extra_select {
+                    s.push_str(", ");
+                    s.push_str(extra);
+                }
+                s
+            } else {
+                let mut s = String::from("*");
+                if let Some(extra) = extra_select {
+                    s.push_str(", ");
+                    s.push_str(extra);
+                }
+                s
             }
-            s
         }
     };
 
-    let mut sql = format!("SELECT {} FROM data", select);
+    let mut sql = format!("SELECT {} FROM {}", select, table);
     let mut conditions = Vec::new();
 
     if let Some(sw) = spatial_where {
@@ -151,8 +159,8 @@ fn query_aggregate(
         "COUNT(*) AS count".to_string()
     };
 
-    let table = if spatial_where.is_some() { "raw_data" } else { "data" };
-    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table);
+    let table2 = if spatial_where.is_some() { "raw_data" } else { "data" };
+    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
 
     let mut conditions = Vec::new();
 
