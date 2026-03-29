@@ -32,10 +32,6 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
         }
         "geojson" | "json" => {
-            conn.execute_batch("INSTALL spatial; LOAD spatial;")
-                .map_err(|e| {
-                    AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e))
-                })?;
             conn.execute_batch(&format!(
                 "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
@@ -146,6 +142,62 @@ fn detect_column(
         label,
         columns.join(", ")
     )))
+}
+
+/// Add a geometry column and R-tree index to raw_data, then recreate the data view excluding geom.
+pub fn add_spatial_index(
+    conn: &duckdb::Connection,
+    lat_col: &str,
+    lon_col: &str,
+) -> Result<(), AppError> {
+    info!(lat = %lat_col, lon = %lon_col, "building spatial index");
+
+    conn.execute_batch("ALTER TABLE raw_data ADD COLUMN geom GEOMETRY")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Add geom column error: {}", e)))?;
+
+    conn.execute_batch(&format!(
+        "UPDATE raw_data SET geom = ST_Point(\"{lon}\", \"{lat}\") WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+        lat = lat_col,
+        lon = lon_col,
+    ))
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Populate geom error: {}", e)))?;
+
+    conn.execute_batch("CREATE INDEX spatial_idx ON raw_data USING RTREE(geom)")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("R-tree index error: {}", e)))?;
+
+    // Recreate the data view excluding the geom column
+    conn.execute_batch("DROP VIEW IF EXISTS data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop view error: {}", e)))?;
+
+    // Build column list excluding geom
+    let mut cols = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'raw_data' AND column_name != 'geom' ORDER BY ordinal_position")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list error: {}", e)))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list query error: {}", e)))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list row error: {}", e)))?
+    {
+        let name: String = row
+            .get(0)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Column name error: {}", e)))?;
+        cols.push(format!("\"{}\"", name));
+    }
+    drop(rows);
+    drop(stmt);
+
+    let col_list = cols.join(", ");
+    conn.execute_batch(&format!(
+        "CREATE VIEW data AS SELECT {} FROM raw_data",
+        col_list
+    ))
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Recreate view error: {}", e)))?;
+
+    info!("spatial index created");
+    Ok(())
 }
 
 fn escape_sql_string(s: &str) -> String {
