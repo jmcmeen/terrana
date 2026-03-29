@@ -165,6 +165,43 @@ Results on 1M rows (release build, single core):
 | Geometry (area/distance/buffer) | 1 | ~5ms |
 | Schema / Stats / Health | — | ~5ms |
 
+## Citation
+
+If you use Terrana in academic research, please cite it as:
+
+```bibtex
+@software{terrana,
+  title  = {Terrana: Zero-Config Spatial API Server},
+  url    = {https://github.com/your-org/terrana},
+  year   = {2024},
+  note   = {Rust-based spatial query server using DuckDB and R-tree indexing}
+}
+```
+
+Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/your-org/terrana>*
+
+## Contributing
+
+Contributions are welcome. Here are some ways to get involved:
+
+- **Bug reports** — Open an issue describing the problem, the file format you used, and the query that triggered it.
+- **New file formats** — Terrana ingests via DuckDB; adding support for a new format usually means a small addition to `src/db/loader.rs`.
+- **Geometry operations** — New `POST /geometry/*` endpoints go in `src/handlers/geometry.rs`. All spatial math must use geodesic algorithms from the `geo` crate (never planar/Cartesian).
+- **Performance** — Benchmark with `./bench.sh`, profile with `cargo flamegraph`, and open a PR with before/after numbers.
+- **Documentation** — Improvements to this README, examples, or inline doc comments are always appreciated.
+
+### Getting started
+
+```bash
+git clone https://github.com/your-org/terrana.git
+cd terrana
+cargo build
+cargo run -- serve testdata/observations.csv
+# Run the acceptance tests from CLAUDE.md to verify everything works
+```
+
+Please run `cargo fmt` and `cargo clippy` before submitting a PR.
+
 ## License
 
 MIT
