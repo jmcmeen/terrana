@@ -5,7 +5,7 @@ use crate::error::AppError;
 use duckdb::Connection;
 use std::sync::{Mutex, MutexGuard};
 
-/// Create an in-memory DuckDB connection with spatial extension loaded.
+/// Create an in-memory DuckDB connection.
 pub fn create_connection() -> Result<Connection, AppError> {
     let conn = Connection::open_in_memory()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB init error: {}", e)))?;
