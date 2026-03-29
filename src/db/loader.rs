@@ -146,6 +146,66 @@ fn detect_column(
     )))
 }
 
+/// Add a geometry column and R-tree index to raw_data, then recreate the data view excluding geom.
+/// Spatial extension must be loaded after file ingestion to avoid crashes during CSV loading.
+pub fn add_spatial_index(
+    conn: &duckdb::Connection,
+    lat_col: &str,
+    lon_col: &str,
+) -> Result<(), AppError> {
+    info!(lat = %lat_col, lon = %lon_col, "building spatial index");
+
+    crate::db::ensure_spatial(conn)?;
+
+    // Create new table with geometry column (avoids ALTER TABLE + UPDATE crash)
+    conn.execute_batch(&format!(
+        "CREATE TABLE spatial_data AS SELECT *, ST_Point(\"{lon}\", \"{lat}\") AS geom FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+        lat = lat_col, lon = lon_col,
+    ))
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial table creation error: {}", e)))?;
+
+    conn.execute_batch("DROP TABLE raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop raw_data error: {}", e)))?;
+    conn.execute_batch("ALTER TABLE spatial_data RENAME TO raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Rename table error: {}", e)))?;
+
+    conn.execute_batch("CREATE INDEX spatial_idx ON raw_data USING RTREE(geom)")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("R-tree index error: {}", e)))?;
+
+    // Recreate data view excluding geom
+    conn.execute_batch("DROP VIEW IF EXISTS data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop view error: {}", e)))?;
+
+    let mut cols = Vec::new();
+    let mut stmt = conn
+        .prepare("DESCRIBE raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE error: {}", e)))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE query error: {}", e)))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE row error: {}", e)))?
+    {
+        let name: String = row
+            .get(0)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Column name error: {}", e)))?;
+        if name != "geom" {
+            cols.push(format!("\"{}\"", name));
+        }
+    }
+    drop(rows);
+    drop(stmt);
+
+    conn.execute_batch(&format!(
+        "CREATE VIEW data AS SELECT {} FROM raw_data",
+        cols.join(", ")
+    ))
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Recreate view error: {}", e)))?;
+
+    info!("spatial index created");
+    Ok(())
+}
 
 fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")

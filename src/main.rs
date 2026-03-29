@@ -80,13 +80,21 @@ async fn main() -> anyhow::Result<()> {
                 db::loader::detect_lat_lon(&table_info.col_names, lat.as_deref(), lon.as_deref())?;
             info!(lat = %lat_col, lon = %lon_col, "columns detected");
 
+            // Build spatial index (geom column + R-tree)
+            let start_build = Instant::now();
+            {
+                let conn = db::lock_db(&db_mutex)?;
+                db::loader::add_spatial_index(&conn, &lat_col, &lon_col)?;
+            }
+            let index_build_ms = start_build.elapsed().as_millis();
+            info!(ms = %index_build_ms, "spatial index built");
+
             // Cache spatial extent for stats endpoint
-            let index_build_ms: u128 = 0;
             let (spatial_bbox, spatial_count) = {
                 let conn = db::lock_db(&db_mutex)?;
                 let mut stmt = conn
                     .prepare(&format!(
-                        "SELECT MIN(\"{lat}\"), MIN(\"{lon}\"), MAX(\"{lat}\"), MAX(\"{lon}\"), COUNT(*) FROM data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+                        "SELECT MIN(\"{lat}\"), MIN(\"{lon}\"), MAX(\"{lat}\"), MAX(\"{lon}\"), COUNT(*) FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
                         lat = lat_col,
                         lon = lon_col,
                     ))?;

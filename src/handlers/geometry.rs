@@ -221,7 +221,7 @@ pub async fn dissolve(
         }
         let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
-        db::query::query_rows_in_bbox(&state.db, &state.schema.lat_col, &state.schema.lon_col, min_lat, min_lon, max_lat, max_lon, 100_000)?
+        db::query::query_rows_in_bbox(&state.db, min_lat, min_lon, max_lat, max_lon, 100_000)?
     } else {
         db::query::query(&state.db, None, &[], None, None, None, 100_000, None, None)?
     };
