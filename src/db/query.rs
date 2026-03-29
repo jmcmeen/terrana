@@ -6,52 +6,54 @@ use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
-// --- Spatial SQL helpers ---
+// --- Spatial SQL helpers (plain SQL, no spatial extension) ---
 
-/// Build a WHERE fragment for bounding box queries using ST_Intersects (R-tree accelerated).
-pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
+/// Haversine distance formula in SQL, returns meters.
+fn haversine_sql(lat_col: &str, lon_col: &str, lat: f64, lon: f64) -> String {
     format!(
-        "ST_Intersects(geom, ST_MakeEnvelope({}, {}, {}, {}))",
-        min_lon, min_lat, max_lon, max_lat
+        "2 * 6371000.0 * ASIN(SQRT(\
+            POWER(SIN(RADIANS(\"{lat_col}\" - {lat}) / 2), 2) + \
+            COS(RADIANS({lat})) * COS(RADIANS(\"{lat_col}\")) * \
+            POWER(SIN(RADIANS(\"{lon_col}\" - {lon}) / 2), 2)\
+        ))",
+        lat_col = lat_col, lon_col = lon_col, lat = lat, lon = lon,
     )
 }
 
-/// Build a WHERE fragment for radius queries: bbox envelope + haversine distance check.
-pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
+/// WHERE fragment for bounding box queries on lat/lon columns.
+pub fn bbox_filter(lat_col: &str, lon_col: &str, min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
+    format!(
+        "\"{}\" BETWEEN {} AND {} AND \"{}\" BETWEEN {} AND {}",
+        lat_col, min_lat, max_lat, lon_col, min_lon, max_lon
+    )
+}
+
+/// WHERE fragment for radius queries: bbox pre-filter + haversine.
+pub fn radius_filter(lat_col: &str, lon_col: &str, lat: f64, lon: f64, radius_m: f64) -> String {
     let deg_offset = radius_m / 111_000.0 * 1.5;
-    let bbox = bbox_filter(
-        lat - deg_offset,
-        lon - deg_offset,
-        lat + deg_offset,
-        lon + deg_offset,
-    );
-    format!(
-        "{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
-        bbox, lon, lat, radius_m
-    )
+    let bbox = bbox_filter(lat_col, lon_col, lat - deg_offset, lon - deg_offset, lat + deg_offset, lon + deg_offset);
+    format!("{} AND {} <= {}", bbox, haversine_sql(lat_col, lon_col, lat, lon), radius_m)
 }
 
-/// Build a SELECT expression for distance in km (haversine).
-pub fn distance_select(lat: f64, lon: f64) -> String {
-    format!(
-        "ST_Distance_Sphere(geom, ST_Point({}, {})) / 1000.0 AS _distance_km",
-        lon, lat
-    )
+/// SELECT expression for haversine distance in km.
+pub fn distance_select(lat_col: &str, lon_col: &str, lat: f64, lon: f64) -> String {
+    format!("{} / 1000.0 AS _distance_km", haversine_sql(lat_col, lon_col, lat, lon))
 }
 
-/// Build a WHERE fragment for point-in-polygon using ST_Contains (R-tree accelerated).
-pub fn within_filter_geojson(geojson_str: &str) -> String {
+/// WHERE fragment for point-in-polygon using DuckDB spatial extension (loaded on-demand).
+/// Uses ST_Contains with inline ST_Point — no pre-materialized geometry column.
+pub fn within_filter(lat_col: &str, lon_col: &str, geojson_str: &str) -> String {
     format!(
-        "ST_Contains(ST_GeomFromGeoJSON('{}'), geom)",
-        geojson_str.replace('\'', "''")
+        "ST_Contains(ST_GeomFromGeoJSON('{geojson}'), ST_Point(\"{lon_col}\", \"{lat_col}\"))",
+        geojson = geojson_str.replace('\'', "''"),
+        lat_col = lat_col,
+        lon_col = lon_col,
     )
 }
 
 // --- Query functions ---
 
 /// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
-/// When `spatial_where` is provided, queries `raw_data` (which has the geom column + R-tree index)
-/// and excludes the geom column from output. Otherwise queries the `data` view.
 pub fn query(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
@@ -69,8 +71,6 @@ pub fn query(
         return query_aggregate(db, spatial_where, where_clauses, gb, a, limit);
     }
 
-    let table = if spatial_where.is_some() { "raw_data" } else { "data" };
-
     let select = match select_cols {
         Some(cols) => {
             for c in cols {
@@ -84,25 +84,16 @@ pub fn query(
             s
         }
         None => {
-            if spatial_where.is_some() {
-                let mut s = String::from("* EXCLUDE (geom)");
-                if let Some(extra) = extra_select {
-                    s.push_str(", ");
-                    s.push_str(extra);
-                }
-                s
-            } else {
-                let mut s = String::from("*");
-                if let Some(extra) = extra_select {
-                    s.push_str(", ");
-                    s.push_str(extra);
-                }
-                s
+            let mut s = String::from("*");
+            if let Some(extra) = extra_select {
+                s.push_str(", ");
+                s.push_str(extra);
             }
+            s
         }
     };
 
-    let mut sql = format!("SELECT {} FROM {}", select, table);
+    let mut sql = format!("SELECT {} FROM data", select);
     let mut conditions = Vec::new();
 
     if let Some(sw) = spatial_where {
@@ -159,8 +150,7 @@ fn query_aggregate(
         "COUNT(*) AS count".to_string()
     };
 
-    let table2 = if spatial_where.is_some() { "raw_data" } else { "data" };
-    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
+    let mut sql = format!("SELECT \"{}\", {} FROM data", group_by, agg_expr);
 
     let mut conditions = Vec::new();
 
@@ -188,8 +178,7 @@ fn query_aggregate(
     execute_query_to_json(db, &sql)
 }
 
-/// Execute a spatial query on raw_data returning lat/lon points.
-/// Used by geometry handlers that need point coordinates from a bbox.
+/// Query lat/lon points within a bounding box.
 pub fn query_points_in_bbox(
     db: &Mutex<Connection>,
     lat_col: &str,
@@ -199,9 +188,9 @@ pub fn query_points_in_bbox(
     max_lat: f64,
     max_lon: f64,
 ) -> Result<Vec<(f64, f64)>, AppError> {
-    let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
+    let filter = bbox_filter(lat_col, lon_col, min_lat, min_lon, max_lat, max_lon);
     let sql = format!(
-        "SELECT \"{}\", \"{}\" FROM raw_data WHERE {}",
+        "SELECT \"{}\", \"{}\" FROM data WHERE {}",
         lat_col, lon_col, filter
     );
     let conn = db::lock_db(db)?;
@@ -227,21 +216,19 @@ pub fn query_points_in_bbox(
     Ok(points)
 }
 
-/// Execute a spatial query on raw_data returning full rows as JSON.
-/// Used by geometry handlers that need row data from a bbox.
+/// Query full rows within a bounding box.
 pub fn query_rows_in_bbox(
     db: &Mutex<Connection>,
+    lat_col: &str,
+    lon_col: &str,
     min_lat: f64,
     min_lon: f64,
     max_lat: f64,
     max_lon: f64,
     limit: usize,
 ) -> Result<Vec<Value>, AppError> {
-    let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
-    let sql = format!(
-        "SELECT * EXCLUDE (geom) FROM raw_data WHERE {} LIMIT {}",
-        filter, limit
-    );
+    let filter = bbox_filter(lat_col, lon_col, min_lat, min_lon, max_lat, max_lon);
+    let sql = format!("SELECT * FROM data WHERE {} LIMIT {}", filter, limit);
     execute_query_to_json(db, &sql)
 }
 

@@ -5,9 +5,11 @@ use crate::error::AppError;
 use duckdb::Connection;
 use std::sync::{Mutex, MutexGuard};
 
-/// Load the DuckDB spatial extension. Called AFTER file ingestion,
-/// never at connection time — loading it early crashes DuckDB on large CSV files.
-pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
+/// Load the DuckDB spatial extension on-demand.
+/// Only needed for /query/within (PIP) and GeoJSON ingestion.
+/// NOT called at startup — ST_Point crashes on large datasets in DuckDB 1.1.5.
+pub fn ensure_spatial_loaded(db: &Mutex<Connection>) -> Result<(), AppError> {
+    let conn = lock_db(db)?;
     conn.execute_batch("INSTALL spatial; LOAD spatial;")
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
     Ok(())

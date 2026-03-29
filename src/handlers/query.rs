@@ -33,10 +33,13 @@ pub async fn query(
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
+    let lat_col = &state.schema.lat_col;
+    let lon_col = &state.schema.lon_col;
+
     if let Some(bbox_str) = &qp.bbox {
         // Bounding box query
         let bbox = parse_bbox(bbox_str)?;
-        let spatial = db::query::bbox_filter(bbox.0, bbox.1, bbox.2, bbox.3);
+        let spatial = db::query::bbox_filter(lat_col, lon_col, bbox.0, bbox.1, bbox.2, bbox.3);
 
         let rows = db::query::query(
             &state.db,
@@ -52,10 +55,11 @@ pub async fn query(
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(nearest)) = (qp.lat, qp.lon, qp.nearest) {
         // Nearest neighbor query — ORDER BY distance + LIMIT
-        let extra = db::query::distance_select(lat, lon);
+        let not_null = format!("\"{}\" IS NOT NULL AND \"{}\" IS NOT NULL", lat_col, lon_col);
+        let extra = db::query::distance_select(lat_col, lon_col, lat, lon);
         let rows = db::query::query(
             &state.db,
-            Some("geom IS NOT NULL"),
+            Some(&not_null),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -68,8 +72,8 @@ pub async fn query(
     } else if let (Some(lat), Some(lon), Some(radius_str)) = (qp.lat, qp.lon, &qp.radius) {
         // Radius query
         let radius_m = parse_radius(radius_str)?;
-        let spatial = db::query::radius_filter(lat, lon, radius_m);
-        let extra = db::query::distance_select(lat, lon);
+        let spatial = db::query::radius_filter(lat_col, lon_col, lat, lon, radius_m);
+        let extra = db::query::distance_select(lat_col, lon_col, lat, lon);
 
         let rows = db::query::query(
             &state.db,

@@ -11,9 +11,15 @@ pub async fn within(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
-    // Extract the GeoJSON geometry and use ST_Contains for R-tree accelerated PIP
+    let lat_col = &state.schema.lat_col;
+    let lon_col = &state.schema.lon_col;
+
+    // Load spatial extension on-demand (first call downloads + loads it)
+    db::ensure_spatial_loaded(&state.db)?;
+
+    // Extract the GeoJSON geometry and use ST_Contains with inline ST_Point
     let geojson_str = extract_geometry_geojson(&body)?;
-    let spatial = db::query::within_filter_geojson(&geojson_str);
+    let spatial = db::query::within_filter(lat_col, lon_col, &geojson_str);
 
     let rows = db::query::query(
         &state.db,
