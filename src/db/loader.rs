@@ -152,16 +152,21 @@ pub fn add_spatial_index(
 ) -> Result<(), AppError> {
     info!(lat = %lat_col, lon = %lon_col, "building spatial index");
 
-    conn.execute_batch("ALTER TABLE raw_data ADD COLUMN geom GEOMETRY")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Add geom column error: {}", e)))?;
-
+    // Create a new table with geometry column via SELECT (avoids ALTER TABLE + UPDATE bug)
     conn.execute_batch(&format!(
-        "UPDATE raw_data SET geom = ST_Point(\"{lon}\", \"{lat}\") WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+        "CREATE TABLE spatial_data AS SELECT *, ST_Point(\"{lon}\", \"{lat}\") AS geom FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
         lat = lat_col,
         lon = lon_col,
     ))
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Populate geom error: {}", e)))?;
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial table creation error: {}", e)))?;
 
+    // Drop old raw_data, rename spatial_data
+    conn.execute_batch("DROP TABLE raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop raw_data error: {}", e)))?;
+    conn.execute_batch("ALTER TABLE spatial_data RENAME TO raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Rename table error: {}", e)))?;
+
+    // Create R-tree index
     conn.execute_batch("CREATE INDEX spatial_idx ON raw_data USING RTREE(geom)")
         .map_err(|e| AppError::Internal(anyhow::anyhow!("R-tree index error: {}", e)))?;
 
@@ -169,22 +174,24 @@ pub fn add_spatial_index(
     conn.execute_batch("DROP VIEW IF EXISTS data")
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop view error: {}", e)))?;
 
-    // Build column list excluding geom
+    // Build column list excluding geom via DESCRIBE
     let mut cols = Vec::new();
     let mut stmt = conn
-        .prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'raw_data' AND column_name != 'geom' ORDER BY ordinal_position")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list error: {}", e)))?;
+        .prepare("DESCRIBE raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE error: {}", e)))?;
     let mut rows = stmt
         .query([])
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list query error: {}", e)))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE query error: {}", e)))?;
     while let Some(row) = rows
         .next()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column list row error: {}", e)))?
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE row error: {}", e)))?
     {
         let name: String = row
             .get(0)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Column name error: {}", e)))?;
-        cols.push(format!("\"{}\"", name));
+        if name != "geom" {
+            cols.push(format!("\"{}\"", name));
+        }
     }
     drop(rows);
     drop(stmt);
