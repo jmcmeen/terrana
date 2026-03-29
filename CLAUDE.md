@@ -240,6 +240,7 @@ Options:
   --port <PORT>       HTTP port [default: 8080]
   --bind <ADDR>       Bind address [default: 127.0.0.1]
   --watch             Re-index when source file changes
+  --disk              Use on-disk DuckDB storage (reduces RAM for large files)
   -h, --help          Print help
   -V, --version       Print version
 ```
@@ -438,6 +439,9 @@ cargo run -- serve testdata/observations.csv
 
 # With explicit columns and custom port
 cargo run -- serve testdata/observations.csv --lat latitude --lon longitude --port 9000
+
+# Large files — use --disk to keep DuckDB on disk and reduce RAM
+cargo run -- serve huge_dataset.csv --disk
 
 # Release build
 cargo build --release
