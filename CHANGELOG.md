@@ -2,6 +2,23 @@
 
 All notable changes to Terrana will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Replaced in-memory rstar R-tree with DuckDB spatial R-tree index** — spatial indexing is now handled entirely by DuckDB's spatial extension (`CREATE INDEX ... USING RTREE`). This eliminates the ~18GB RAM overhead at 250M rows and removes the startup cost of scanning all rows into a Rust-side index.
+- Query path distances (radius, nearest) now use haversine (`ST_Distance_Sphere`) instead of Vincenty. Accurate to ~0.3% — sufficient for spatial filtering. Geometry endpoints still use ellipsoidal math.
+- All spatial queries are now single SQL statements with spatial predicates (`ST_Intersects`, `ST_Contains`, `ST_Distance_Sphere`) instead of the previous two-stage R-tree prune → DuckDB fetch pattern.
+
+### Added
+
+- `--disk` flag for `terrana serve` — uses on-disk DuckDB storage instead of in-memory, reducing RAM usage for large datasets. DuckDB spatial index is also stored on disk.
+
+### Removed
+
+- `rstar` and `rayon` dependencies — no longer needed with DuckDB-managed spatial index.
+- `src/index/` module (`SpatialPoint`, `build_rtree`) — replaced by `db::loader::add_spatial_index()`.
+
 ## [0.1.0] - 2026-03-20
 
 ### Added
