@@ -4,11 +4,7 @@ use crate::output;
 use crate::server::AppState;
 use axum::extract::{Query, State};
 use axum::response::Response;
-use geo::{Distance, Geodesic};
-use geo_types::Point;
-use rstar::AABB;
 use serde::Deserialize;
-use std::cmp::Ordering;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -40,112 +36,52 @@ pub async fn query(
     if let Some(bbox_str) = &qp.bbox {
         // Bounding box query
         let bbox = parse_bbox(bbox_str)?;
-        let envelope = AABB::from_corners(
-            [bbox.1, bbox.0], // [min_lon, min_lat]
-            [bbox.3, bbox.2], // [max_lon, max_lat]
-        );
-        let candidates: Vec<i64> = state
-            .index
-            .locate_in_envelope(&envelope)
-            .map(|p| p.rowid)
-            .collect();
+        let spatial = db::query::bbox_filter(bbox.0, bbox.1, bbox.2, bbox.3);
 
         let rows = db::query::query(
             &state.db,
-            Some(&candidates),
+            Some(&spatial),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
             qp.agg.as_deref(),
             limit,
+            None,
+            None,
         )?;
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(nearest)) = (qp.lat, qp.lon, qp.nearest) {
-        // Nearest neighbor query
-        let origin = Point::new(lon, lat);
-        let mut results: Vec<(i64, f64)> = state
-            .index
-            .nearest_neighbor_iter(&[lon, lat])
-            .take(nearest)
-            .map(|p| {
-                let dist_m = Geodesic::distance(origin, Point::new(p.lon, p.lat));
-                (p.rowid, dist_m / 1000.0)
-            })
-            .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-
-        let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
-        let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = db::query::query(
+        // Nearest neighbor query — ORDER BY distance + LIMIT
+        let extra = db::query::distance_select(lat, lon);
+        let rows = db::query::query(
             &state.db,
-            Some(&rowids),
+            Some("geom IS NOT NULL"),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
             qp.agg.as_deref(),
-            limit,
+            nearest,
+            Some(&extra),
+            Some("_distance_km ASC"),
         )?;
-        inject_distances(&mut rows, &distances);
-        rows.sort_by(|a, b| {
-            let da = a
-                .get("_distance_km")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(f64::MAX);
-            let db = b
-                .get("_distance_km")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
-        });
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(radius_str)) = (qp.lat, qp.lon, &qp.radius) {
         // Radius query
         let radius_m = parse_radius(radius_str)?;
-        let origin = Point::new(lon, lat);
+        let spatial = db::query::radius_filter(lat, lon, radius_m);
+        let extra = db::query::distance_select(lat, lon);
 
-        let deg_offset = radius_m / 111_000.0 * 1.5;
-        let envelope = AABB::from_corners(
-            [lon - deg_offset, lat - deg_offset],
-            [lon + deg_offset, lat + deg_offset],
-        );
-
-        let mut results: Vec<(i64, f64)> = state
-            .index
-            .locate_in_envelope(&envelope)
-            .filter_map(|p| {
-                let dist_m = Geodesic::distance(origin, Point::new(p.lon, p.lat));
-                if dist_m <= radius_m {
-                    Some((p.rowid, dist_m / 1000.0))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-
-        let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
-        let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = db::query::query(
+        let rows = db::query::query(
             &state.db,
-            Some(&rowids),
+            Some(&spatial),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
             qp.agg.as_deref(),
             limit,
+            Some(&extra),
+            Some("_distance_km ASC"),
         )?;
-        inject_distances(&mut rows, &distances);
-        rows.sort_by(|a, b| {
-            let da = a
-                .get("_distance_km")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(f64::MAX);
-            let db = b
-                .get("_distance_km")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
-        });
         output::format_response(&rows, format, &state)
     } else {
         // No spatial filter — plain table query
@@ -157,6 +93,8 @@ pub async fn query(
             qp.group_by.as_deref(),
             qp.agg.as_deref(),
             limit,
+            None,
+            None,
         )?;
         output::format_response(&rows, format, &state)
     }
@@ -233,16 +171,4 @@ fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
 
 fn parse_select(select: Option<&str>) -> Option<Vec<String>> {
     select.map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
-}
-
-fn inject_distances(rows: &mut [serde_json::Value], distances: &HashMap<i64, f64>) {
-    for row in rows.iter_mut() {
-        if let Some(obj) = row.as_object_mut() {
-            if let Some(rowid) = obj.get("rowid").and_then(|v| v.as_i64()) {
-                if let Some(&dist) = distances.get(&rowid) {
-                    obj.insert("_distance_km".to_string(), serde_json::json!(dist));
-                }
-            }
-        }
-    }
 }
