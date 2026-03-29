@@ -54,13 +54,19 @@ pub async fn convex_hull(
         }
         let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
-        let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
-        let pts: Vec<Point<f64>> = state
-            .index
-            .locate_in_envelope(&envelope)
-            .map(|p| Point::new(p.lon, p.lat))
-            .collect();
-        pts
+        let raw_pts = db::query::query_points_in_bbox(
+            &state.db,
+            &state.schema.lat_col,
+            &state.schema.lon_col,
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        )?;
+        raw_pts
+            .into_iter()
+            .map(|(lat, lon)| Point::new(lon, lat))
+            .collect()
     } else {
         extract_points_from_body(&body)?
     };
@@ -215,16 +221,9 @@ pub async fn dissolve(
         }
         let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
-        let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
-        let rowids: Vec<i64> = state
-            .index
-            .locate_in_envelope(&envelope)
-            .map(|p| p.rowid)
-            .collect();
-
-        db::query::get_rows_by_ids(&state.db, &rowids)?
+        db::query::query_rows_in_bbox(&state.db, min_lat, min_lon, max_lat, max_lon, 100_000)?
     } else {
-        db::query::query(&state.db, None, &[], None, None, None, 100_000)?
+        db::query::query(&state.db, None, &[], None, None, None, 100_000, None, None)?
     };
 
     let lat_col = &state.schema.lat_col;
