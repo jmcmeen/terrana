@@ -3,7 +3,6 @@ mod config;
 mod db;
 mod error;
 mod handlers;
-mod index;
 mod output;
 mod server;
 
@@ -81,10 +80,36 @@ async fn main() -> anyhow::Result<()> {
                 db::loader::detect_lat_lon(&table_info.col_names, lat.as_deref(), lon.as_deref())?;
             info!(lat = %lat_col, lon = %lon_col, "columns detected");
 
-            // Build R-tree index
+            // Build DuckDB spatial index (replaces in-memory R-tree)
             let start_build = Instant::now();
-            let tree = index::build::build_rtree(&db_mutex, &lat_col, &lon_col)?;
+            {
+                let conn = db::lock_db(&db_mutex)?;
+                db::loader::add_spatial_index(&conn, &lat_col, &lon_col)?;
+            }
             let index_build_ms = start_build.elapsed().as_millis();
+            info!(ms = %index_build_ms, "spatial index built");
+
+            // Cache spatial extent for stats endpoint
+            let (spatial_bbox, spatial_count) = {
+                let conn = db::lock_db(&db_mutex)?;
+                let mut stmt = conn
+                    .prepare(&format!(
+                        "SELECT MIN(\"{lat}\"), MIN(\"{lon}\"), MAX(\"{lat}\"), MAX(\"{lon}\"), COUNT(*) FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+                        lat = lat_col,
+                        lon = lon_col,
+                    ))?;
+                let result: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) =
+                    stmt.query_row([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                    })?;
+                let bbox = match result {
+                    (Some(min_lat), Some(min_lon), Some(max_lat), Some(max_lon), _) => {
+                        Some((min_lat, min_lon, max_lat, max_lon))
+                    }
+                    _ => None,
+                };
+                (bbox, result.4)
+            };
 
             let schema = TableSchema {
                 source: file.display().to_string(),
@@ -105,10 +130,11 @@ async fn main() -> anyhow::Result<()> {
             let state = AppState {
                 config: Arc::new(config),
                 db: db_mutex,
-                index: Arc::new(tree),
                 schema: Arc::new(schema),
                 start_time: Instant::now(),
                 index_build_ms,
+                spatial_bbox,
+                spatial_count,
             };
 
             let app = server::build_router(state);
