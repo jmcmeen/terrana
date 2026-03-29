@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
             port,
             bind,
             watch,
+            disk,
         } => {
             let config = Config {
                 file: file.clone(),
@@ -44,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
                 port,
                 bind: bind.clone(),
                 watch,
+                disk,
             };
 
             info!("terrana v{}", env!("CARGO_PKG_VERSION"));
@@ -55,7 +57,18 @@ async fn main() -> anyhow::Result<()> {
 
             // Create DuckDB connection and load file
             let abs_path = std::fs::canonicalize(&file)?;
-            let conn = db::create_connection()?;
+
+            // Hold _tmp_dir in scope so the temp directory lives as long as the server
+            let _tmp_dir;
+            let conn = if disk {
+                info!("using on-disk DuckDB storage");
+                let (c, td) = db::create_disk_connection()?;
+                _tmp_dir = Some(td);
+                c
+            } else {
+                _tmp_dir = None;
+                db::create_connection()?
+            };
             db::loader::load_file(&conn, &abs_path, table.as_deref())?;
 
             let db_mutex = Arc::new(Mutex::new(conn));

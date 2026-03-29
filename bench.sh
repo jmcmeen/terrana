@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # Terrana benchmark script
-# Usage: ./bench.sh [10k|100k|1m|250m] [port]
+# Usage: ./bench.sh [10k|100k|1m|250m] [port] [--disk]
 #
 # Starts a terrana server against the specified dataset,
 # runs a suite of timed queries, and prints a summary table.
 
 DATASET="${1:-100k}"
 PORT="${2:-9090}"
+EXTRA_FLAGS="${3:-}"
 FILE="testdata/bench_${DATASET}.csv"
 BASE="http://localhost:${PORT}"
 BINARY="./target/release/terrana"
@@ -30,7 +31,7 @@ fi
 
 # Start server in background
 echo "Starting terrana on port $PORT with $FILE..."
-$BINARY serve "$FILE" --port "$PORT" &
+$BINARY serve "$FILE" --port "$PORT" $EXTRA_FLAGS &
 SERVER_PID=$!
 trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
 

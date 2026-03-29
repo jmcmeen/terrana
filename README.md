@@ -35,6 +35,7 @@ terrana serve <FILE> [OPTIONS]
 | `--port <PORT>` | HTTP port | 8080 |
 | `--bind <ADDR>` | Bind address | 127.0.0.1 |
 | `--watch` | Re-index when source file changes | off |
+| `--disk` | Use on-disk DuckDB storage (reduces RAM for large files) | off |
 
 ### Auto-detection of lat/lon columns
 
@@ -99,6 +100,9 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 ```bash
 # Start server
 cargo run -- serve testdata/observations.csv
+
+# Large files — use --disk to keep DuckDB on disk and reduce RAM usage
+cargo run -- serve huge_dataset.csv --disk
 
 # Radius search
 curl "localhost:8080/query?lat=36.54&lon=-82.54&radius=5km"

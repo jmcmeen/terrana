@@ -10,4 +10,5 @@ pub struct Config {
     pub port: u16,
     pub bind: String,
     pub watch: bool,
+    pub disk: bool,
 }

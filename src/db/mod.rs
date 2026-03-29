@@ -12,6 +12,17 @@ pub fn create_connection() -> Result<Connection, AppError> {
     Ok(conn)
 }
 
+/// Create an on-disk DuckDB connection using a temp file.
+/// Reduces RAM usage for large datasets by letting DuckDB spill to disk.
+pub fn create_disk_connection() -> Result<(Connection, tempfile::TempDir), AppError> {
+    let tmp_dir = tempfile::tempdir()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create temp dir: {}", e)))?;
+    let db_path = tmp_dir.path().join("terrana.duckdb");
+    let conn = Connection::open(&db_path)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB disk init error: {}", e)))?;
+    Ok((conn, tmp_dir))
+}
+
 /// Lock the database mutex, mapping poisoned-mutex errors into AppError.
 pub fn lock_db(db: &Mutex<Connection>) -> Result<MutexGuard<'_, Connection>, AppError> {
     db.lock()
