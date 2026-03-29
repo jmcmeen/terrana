@@ -37,19 +37,6 @@ pub async fn query(
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
-    // Validate column names
-    for (col, _) in &where_clauses {
-        db::validate_column_name(col)?;
-    }
-    if let Some(ref cols) = select_cols {
-        for col in cols {
-            db::validate_column_name(col)?;
-        }
-    }
-    if let Some(ref gb) = qp.group_by {
-        db::validate_column_name(gb)?;
-    }
-
     if let Some(bbox_str) = &qp.bbox {
         // Bounding box query
         let bbox = parse_bbox(bbox_str)?;
