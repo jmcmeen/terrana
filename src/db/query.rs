@@ -1,243 +1,304 @@
+use crate::db;
 use crate::error::AppError;
+use chrono::NaiveDate;
+use duckdb::arrow::datatypes::DataType;
 use duckdb::Connection;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::sync::Mutex;
 
-/// Fetch all column metadata for the data view.
-pub fn get_columns(conn: &Connection) -> Result<Vec<(String, String)>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT column_name, data_type FROM information_schema.columns \
-         WHERE table_name = 'data' ORDER BY ordinal_position",
-    )?;
-    let cols: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(cols)
+/// Build a `rowid IN (1,2,3)` SQL fragment from an id slice.
+fn rowid_in_clause(ids: &[i64]) -> String {
+    let csv: String = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("rowid IN ({})", csv)
 }
 
-/// Get the row count from the data view.
-pub fn row_count(conn: &Connection) -> Result<i64, AppError> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))?;
-    Ok(count)
-}
-
-/// Fetch rows by a list of rowids, returning them as JSON values.
-pub fn fetch_rows_by_ids(
-    conn: &Connection,
-    rowids: &[i64],
-    columns: Option<&[String]>,
-) -> Result<Vec<Value>, AppError> {
-    if rowids.is_empty() {
+/// Fetch rows by rowid list. Returns all columns as JSON objects.
+pub fn get_rows_by_ids(db: &Mutex<Connection>, ids: &[i64]) -> Result<Vec<Value>, AppError> {
+    if ids.is_empty() {
         return Ok(vec![]);
     }
-
-    let col_clause = match columns {
-        Some(cols) if !cols.is_empty() => cols.join(", "),
-        _ => "*".to_string(),
-    };
-
-    let placeholders: Vec<String> = rowids.iter().map(|id| id.to_string()).collect();
     let sql = format!(
-        "SELECT {} FROM data WHERE rowid IN ({})",
-        col_clause,
-        placeholders.join(", ")
+        "SELECT * FROM data WHERE {} ORDER BY rowid",
+        rowid_in_clause(ids)
     );
-
-    execute_query_to_json(conn, &sql)
+    execute_query_to_json(db, &sql)
 }
 
-/// Fetch all rows with optional SQL clauses.
-pub fn fetch_all_rows(
-    conn: &Connection,
+/// Execute a query with optional spatial rowid filter, where/select/group_by/agg/limit.
+pub fn query(
+    db: &Mutex<Connection>,
+    ids: Option<&[i64]>,
     where_clauses: &[(String, String)],
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Value>, AppError> {
-    let col_clause = build_select_clause(select_cols, group_by, agg);
-    let mut sql = format!("SELECT {} FROM data", col_clause);
-
-    let mut conditions = Vec::new();
-    for (col, val) in where_clauses {
-        conditions.push(format!("{} = '{}'", col, val.replace('\'', "''")));
+    // Aggregation path
+    if let (Some(gb), Some(a)) = (group_by, agg) {
+        db::validate_column_name(gb)?;
+        return query_aggregate(db, ids, where_clauses, gb, a, limit);
     }
+
+    // Select clause
+    let select = match select_cols {
+        Some(cols) => {
+            for c in cols {
+                db::validate_column_name(c)?;
+            }
+            cols.join(", ")
+        }
+        None => "*".to_string(),
+    };
+
+    let mut sql = format!("SELECT {} FROM data", select);
+    let mut conditions = Vec::new();
+
+    // Rowid filter
+    if let Some(ids) = ids {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        conditions.push(rowid_in_clause(ids));
+    }
+
+    // Where clauses
+    for (col, val) in where_clauses {
+        db::validate_column_name(col)?;
+        conditions.push(format!(
+            "CAST(\"{}\" AS VARCHAR) = '{}'",
+            col,
+            escape_sql_value(val)
+        ));
+    }
+
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&conditions.join(" AND "));
     }
 
-    if let Some(gb) = group_by {
-        sql.push_str(&format!(" GROUP BY {}", gb));
-    }
-
     sql.push_str(&format!(" LIMIT {}", limit));
 
-    execute_query_to_json(conn, &sql)
+    execute_query_to_json(db, &sql)
 }
 
-/// Execute an arbitrary SQL query and return rows as JSON values.
-/// Gets column names from information_schema to avoid the DuckDB prepared statement limitation.
-pub fn execute_query_to_json(conn: &Connection, sql: &str) -> Result<Vec<Value>, AppError> {
-    // First, get column names by wrapping the query as a subquery with LIMIT 0
-    // and using DESCRIBE, or we can get them from the first row.
-    // Safest approach: use a wrapper query to get column names
-    let col_names = get_query_column_names(conn, sql)?;
-    let mut stmt = conn.prepare(sql)?;
-    let rows: Vec<Value> = stmt
-        .query_map([], |row| {
-            let mut map = serde_json::Map::new();
-            for (i, name) in col_names.iter().enumerate() {
-                let val = duckdb_value_to_json(row, i);
-                map.insert(name.clone(), val);
-            }
-            Ok(Value::Object(map))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(rows)
-}
-
-/// Get column names for a query by creating a temp view and inspecting it.
-fn get_query_column_names(conn: &Connection, sql: &str) -> Result<Vec<String>, AppError> {
-    let view_name = format!(
-        "_col_inspect_{}",
-        uuid::Uuid::new_v4().to_string().replace('-', "")
-    );
-    conn.execute_batch(&format!("CREATE TEMPORARY VIEW {} AS {}", view_name, sql))?;
-
-    let mut stmt = conn.prepare(&format!(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = '{}' ORDER BY ordinal_position",
-        view_name
-    ))?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    conn.execute_batch(&format!("DROP VIEW IF EXISTS {}", view_name))?;
-
-    Ok(names)
-}
-
-fn build_select_clause(
-    select_cols: Option<&[String]>,
-    group_by: Option<&str>,
-    agg: Option<&str>,
-) -> String {
-    match (group_by, agg) {
-        (Some(gb), Some(a)) => {
-            let agg_expr = if a == "count" {
-                "COUNT(*) AS count".to_string()
-            } else if let Some(col) = a.strip_prefix("sum:") {
-                format!("SUM({}) AS sum_{}", col, col)
-            } else if let Some(col) = a.strip_prefix("avg:") {
-                format!("AVG({}) AS avg_{}", col, col)
-            } else if let Some(col) = a.strip_prefix("min:") {
-                format!("MIN({}) AS min_{}", col, col)
-            } else if let Some(col) = a.strip_prefix("max:") {
-                format!("MAX({}) AS max_{}", col, col)
-            } else {
-                "COUNT(*) AS count".to_string()
-            };
-            format!("{}, {}", gb, agg_expr)
-        }
-        _ => match select_cols {
-            Some(cols) if !cols.is_empty() => cols.join(", "),
-            _ => "*".to_string(),
-        },
-    }
-}
-
-fn duckdb_value_to_json(row: &duckdb::Row, idx: usize) -> Value {
-    let dv: duckdb::types::Value = match row.get(idx) {
-        Ok(v) => v,
-        Err(_) => return Value::Null,
+fn query_aggregate(
+    db: &Mutex<Connection>,
+    ids: Option<&[i64]>,
+    where_clauses: &[(String, String)],
+    group_by: &str,
+    agg: &str,
+    limit: usize,
+) -> Result<Vec<Value>, AppError> {
+    let agg_expr = if agg == "count" {
+        "COUNT(*) AS count".to_string()
+    } else if let Some(col) = agg.strip_prefix("sum:") {
+        db::validate_column_name(col)?;
+        format!("SUM(\"{}\") AS sum_{}", col, col)
+    } else if let Some(col) = agg.strip_prefix("avg:") {
+        db::validate_column_name(col)?;
+        format!("AVG(\"{}\") AS avg_{}", col, col)
+    } else if let Some(col) = agg.strip_prefix("min:") {
+        db::validate_column_name(col)?;
+        format!("MIN(\"{}\") AS min_{}", col, col)
+    } else if let Some(col) = agg.strip_prefix("max:") {
+        db::validate_column_name(col)?;
+        format!("MAX(\"{}\") AS max_{}", col, col)
+    } else {
+        "COUNT(*) AS count".to_string()
     };
-    duckdb_val_to_json(dv)
+
+    let mut sql = format!("SELECT \"{}\", {} FROM data", group_by, agg_expr);
+
+    let mut conditions = Vec::new();
+
+    if let Some(ids) = ids {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        conditions.push(rowid_in_clause(ids));
+    }
+
+    for (col, val) in where_clauses {
+        db::validate_column_name(col)?;
+        conditions.push(format!(
+            "CAST(\"{}\" AS VARCHAR) = '{}'",
+            col,
+            escape_sql_value(val)
+        ));
+    }
+
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+
+    sql.push_str(&format!(" GROUP BY \"{}\"", group_by));
+    sql.push_str(&format!(" LIMIT {}", limit));
+
+    execute_query_to_json(db, &sql)
 }
 
-fn duckdb_val_to_json(dv: duckdb::types::Value) -> Value {
-    use duckdb::types::Value as DV;
-    match dv {
-        DV::Null => Value::Null,
-        DV::Boolean(b) => Value::Bool(b),
-        DV::TinyInt(v) => Value::Number((v as i64).into()),
-        DV::SmallInt(v) => Value::Number((v as i64).into()),
-        DV::Int(v) => Value::Number((v as i64).into()),
-        DV::BigInt(v) => Value::Number(v.into()),
-        DV::HugeInt(v) => Value::Number((v as i64).into()),
-        DV::UTinyInt(v) => Value::Number((v as i64).into()),
-        DV::USmallInt(v) => Value::Number((v as i64).into()),
-        DV::UInt(v) => Value::Number((v as i64).into()),
-        DV::UBigInt(v) => Value::Number(v.into()),
-        DV::Float(v) => serde_json::Number::from_f64(v as f64)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
-        DV::Double(v) => serde_json::Number::from_f64(v)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
-        DV::Decimal(d) => Value::String(d.to_string()),
-        DV::Text(s) => Value::String(s),
-        DV::Blob(b) => Value::String(format!("<blob {} bytes>", b.len())),
-        DV::Timestamp(_, micros) => {
-            // Convert microseconds since epoch to ISO string
-            let secs = micros / 1_000_000;
-            let nsecs = ((micros % 1_000_000) * 1000) as u32;
-            Value::String(chrono_from_epoch(secs, nsecs))
+/// Execute a SQL query and return results as Vec<serde_json::Value>.
+fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>, AppError> {
+    let conn = db::lock_db(db)?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL prepare error: {} — {}", e, sql)))?;
+
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL query error: {} — {}", e, sql)))?;
+
+    // Column metadata is available via the Statement backing the Rows.
+    // rows.as_ref() returns Option<&Statement> — None only if the Rows was
+    // created without a statement, which cannot happen via query().
+    let stmt_ref = rows
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No statement backing query results")))?;
+    let col_count = stmt_ref.column_count();
+    let col_names: Vec<String> = (0..col_count)
+        .map(|i| {
+            stmt_ref
+                .column_name(i)
+                .map_or("?".to_string(), |v| v.to_string())
+        })
+        .collect();
+    let col_types: Vec<DataType> = (0..col_count).map(|i| stmt_ref.column_type(i)).collect();
+
+    let mut rows_out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Row fetch error: {}", e)))?
+    {
+        let mut obj = serde_json::Map::with_capacity(col_count);
+        for (i, name) in col_names.iter().enumerate() {
+            let val = row_value_to_json(row, i, &col_types[i]);
+            obj.insert(name.clone(), val);
         }
-        DV::Date32(days) => {
-            // Days since Unix epoch
-            let date = epoch_days_to_date(days);
-            Value::String(date)
+        rows_out.push(Value::Object(obj));
+    }
+
+    Ok(rows_out)
+}
+
+/// Extract a DuckDB row value at column index into a serde_json::Value,
+/// using the Arrow DataType to pick the right conversion.
+fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Value {
+    match col_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32 => match row.get::<_, i64>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
+        DataType::UInt64 => {
+            // u64 can exceed i64::MAX, so read as u64 and serialize carefully
+            match row.get::<_, u64>(idx) {
+                Ok(v) if v <= i64::MAX as u64 => json!(v),
+                Ok(v) => json!(v.to_string()),
+                Err(_) => Value::Null,
+            }
         }
-        DV::Time64(_, v) => Value::String(format!("{}", v)),
-        DV::Interval {
-            months,
-            days,
-            nanos,
-        } => Value::String(format!("{}m{}d{}ns", months, days, nanos)),
-        DV::List(items) => {
-            let arr: Vec<Value> = items.into_iter().map(duckdb_val_to_json).collect();
-            Value::Array(arr)
+        DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => match row.get::<_, f64>(idx) {
+            Ok(v) if v.is_nan() || v.is_infinite() => Value::Null,
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
+        DataType::Boolean => match row.get::<_, bool>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
+        DataType::Date32 => {
+            // Date32 = days since Unix epoch
+            match row.get::<_, i32>(idx) {
+                Ok(days) => {
+                    let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                        .map(|d| d.format("%Y-%m-%d").to_string());
+                    match date {
+                        Some(s) => json!(s),
+                        None => json!(days),
+                    }
+                }
+                Err(_) => Value::Null,
+            }
         }
-        DV::Enum(s) => Value::String(s),
-        DV::Struct(_fields) => Value::String("<struct>".to_string()),
-        DV::Union(v) => duckdb_val_to_json(*v),
-        DV::Map(_m) => Value::String("<map>".to_string()),
-        DV::Array(items) => {
-            let arr: Vec<Value> = items.into_iter().map(duckdb_val_to_json).collect();
-            Value::Array(arr)
+        DataType::Date64 | DataType::Timestamp(_, _) => {
+            // Try string representation
+            match row.get::<_, String>(idx) {
+                Ok(v) => json!(v),
+                Err(_) => {
+                    // Fallback: try as i64 (microseconds/milliseconds since epoch)
+                    match row.get::<_, i64>(idx) {
+                        Ok(v) => json!(v),
+                        Err(_) => Value::Null,
+                    }
+                }
+            }
+        }
+        _ => {
+            // For Utf8 (VARCHAR) and everything else — get as string
+            match row.get::<_, String>(idx) {
+                Ok(v) => json!(v),
+                Err(_) => Value::Null,
+            }
         }
     }
 }
 
-fn epoch_days_to_date(days: i32) -> String {
-    // civil_from_days expects days since Unix epoch (1970-01-01)
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{:04}-{:02}-{:02}", y, m, d)
+/// Scan lat/lon columns from DuckDB for R-tree building.
+/// Returns Vec<(rowid, lat, lon)>.
+pub fn scan_lat_lon(
+    db: &Mutex<Connection>,
+    lat_col: &str,
+    lon_col: &str,
+) -> Result<Vec<(i64, f64, f64)>, AppError> {
+    db::validate_column_name(lat_col)?;
+    db::validate_column_name(lon_col)?;
+    let conn = db::lock_db(db)?;
+    let sql = format!(
+        "SELECT rowid, \"{}\", \"{}\" FROM data WHERE \"{}\" IS NOT NULL AND \"{}\" IS NOT NULL",
+        lat_col, lon_col, lat_col, lon_col
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon prepare: {}", e)))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon query: {}", e)))?;
+
+    let mut points = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon row: {}", e)))?
+    {
+        let rowid: i64 = row
+            .get(0)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon rowid: {}", e)))?;
+        let lat: f64 = row
+            .get(1)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lat: {}", e)))?;
+        let lon: f64 = row
+            .get(2)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lon: {}", e)))?;
+        points.push((rowid, lat, lon));
+    }
+
+    Ok(points)
 }
 
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    // Algorithm from Howard Hinnant's date algorithms
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
-fn chrono_from_epoch(secs: i64, _nsecs: u32) -> String {
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, m, s)
+fn escape_sql_value(s: &str) -> String {
+    s.replace('\'', "''")
 }

@@ -132,6 +132,76 @@ docker compose up --build
 
 The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides.
 
+## Benchmarks
+
+Generate test datasets — simulated iNaturalist-style wildlife observations across the Southern Appalachians:
+
+```bash
+# Standard sizes (10K / 100K / 1M)
+python3 testdata/generate_benchdata.py
+
+# iNaturalist scale (250M rows, ~15 GB)
+python3 testdata/generate_250m.py
+```
+
+Run the benchmark suite:
+
+```bash
+./bench.sh 1m          # 1M rows on default port 9090
+./bench.sh 250m 8080   # 250M rows on port 8080
+./bench.sh 100k        # 100K rows, quick smoke test
+```
+
+Results on 1M rows (release build, single core):
+
+| Query | Rows | Time |
+|---|---|---|
+| Index build (1M points) | — | 199ms |
+| Nearest 10 | 10 | 11ms |
+| Radius 5km | 1,000 | 31ms |
+| Radius 10km | 1,000 | 79ms |
+| BBox 0.2° | 1,000 | 76ms |
+| Within (small polygon) | 20,522 | 119ms |
+| Geometry (area/distance/buffer) | 1 | ~5ms |
+| Schema / Stats / Health | — | ~5ms |
+
+## Citation
+
+If you use Terrana in academic research, please cite it as:
+
+```bibtex
+@software{terrana,
+  title  = {Terrana: Zero-Config Spatial API Server},
+  url    = {https://github.com/your-org/terrana},
+  year   = {2024},
+  note   = {Rust-based spatial query server using DuckDB and R-tree indexing}
+}
+```
+
+Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/your-org/terrana>*
+
+## Contributing
+
+Contributions are welcome. Here are some ways to get involved:
+
+- **Bug reports** — Open an issue describing the problem, the file format you used, and the query that triggered it.
+- **New file formats** — Terrana ingests via DuckDB; adding support for a new format usually means a small addition to `src/db/loader.rs`.
+- **Geometry operations** — New `POST /geometry/*` endpoints go in `src/handlers/geometry.rs`. All spatial math must use geodesic algorithms from the `geo` crate (never planar/Cartesian).
+- **Performance** — Benchmark with `./bench.sh`, profile with `cargo flamegraph`, and open a PR with before/after numbers.
+- **Documentation** — Improvements to this README, examples, or inline doc comments are always appreciated.
+
+### Getting started
+
+```bash
+git clone https://github.com/your-org/terrana.git
+cd terrana
+cargo build
+cargo run -- serve testdata/observations.csv
+# Run the acceptance tests from CLAUDE.md to verify everything works
+```
+
+Please run `cargo fmt` and `cargo clippy` before submitting a PR.
+
 ## License
 
 MIT

@@ -1,4 +1,4 @@
-use crate::db::query as db_query;
+use crate::db;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
@@ -8,6 +8,7 @@ use geo::{Distance, Geodesic};
 use geo_types::Point;
 use rstar::AABB;
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -36,7 +37,6 @@ pub async fn query(
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
-    // Determine query type
     if let Some(bbox_str) = &qp.bbox {
         // Bounding box query
         let bbox = parse_bbox(bbox_str)?;
@@ -50,9 +50,9 @@ pub async fn query(
             .map(|p| p.rowid)
             .collect();
 
-        let rows = fetch_and_filter(
-            &state,
-            &candidates,
+        let rows = db::query::query(
+            &state.db,
+            Some(&candidates),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -72,13 +72,13 @@ pub async fn query(
                 (p.rowid, dist_m / 1000.0)
             })
             .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(
-            &state,
-            &rowids,
+        let mut rows = db::query::query(
+            &state.db,
+            Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -95,7 +95,7 @@ pub async fn query(
                 .get("_distance_km")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap()
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         });
         output::format_response(&rows, format, &state)
     } else if let (Some(lat), Some(lon), Some(radius_str)) = (qp.lat, qp.lon, &qp.radius) {
@@ -103,8 +103,7 @@ pub async fn query(
         let radius_m = parse_radius(radius_str)?;
         let origin = Point::new(lon, lat);
 
-        // Expand envelope by approximate degree offset
-        let deg_offset = radius_m / 111_000.0 * 1.5; // generous buffer
+        let deg_offset = radius_m / 111_000.0 * 1.5;
         let envelope = AABB::from_corners(
             [lon - deg_offset, lat - deg_offset],
             [lon + deg_offset, lat + deg_offset],
@@ -122,13 +121,13 @@ pub async fn query(
                 }
             })
             .collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = fetch_and_filter(
-            &state,
-            &rowids,
+        let mut rows = db::query::query(
+            &state.db,
+            Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -145,17 +144,14 @@ pub async fn query(
                 .get("_distance_km")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(f64::MAX);
-            da.partial_cmp(&db).unwrap()
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         });
         output::format_response(&rows, format, &state)
     } else {
         // No spatial filter — plain table query
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-        let rows = db_query::fetch_all_rows(
-            &db,
+        let rows = db::query::query(
+            &state.db,
+            None,
             &where_clauses,
             select_cols.as_deref(),
             qp.group_by.as_deref(),
@@ -211,7 +207,6 @@ fn parse_radius(s: &str) -> Result<f64, AppError> {
     } else if let Some(val) = s.strip_suffix('m') {
         val.trim().parse::<f64>()
     } else {
-        // Default to meters
         s.parse::<f64>()
     }
     .map_err(|_| {
@@ -238,66 +233,6 @@ fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
 
 fn parse_select(select: Option<&str>) -> Option<Vec<String>> {
     select.map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
-}
-
-fn fetch_and_filter(
-    state: &AppState,
-    rowids: &[i64],
-    where_clauses: &[(String, String)],
-    select_cols: Option<&[String]>,
-    group_by: Option<&str>,
-    agg: Option<&str>,
-    limit: usize,
-) -> Result<Vec<serde_json::Value>, AppError> {
-    if rowids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-
-    let placeholders: Vec<String> = rowids.iter().map(|id| id.to_string()).collect();
-
-    // Build SELECT clause
-    let select_clause = if let (Some(gb), Some(a)) = (group_by, agg) {
-        let agg_expr = if a == "count" {
-            "COUNT(*) AS count".to_string()
-        } else if let Some(col) = a.strip_prefix("sum:") {
-            format!("SUM({}) AS sum_{}", col, col)
-        } else if let Some(col) = a.strip_prefix("avg:") {
-            format!("AVG({}) AS avg_{}", col, col)
-        } else {
-            "COUNT(*) AS count".to_string()
-        };
-        format!("{}, {}", gb, agg_expr)
-    } else {
-        match select_cols {
-            Some(cols) if !cols.is_empty() => cols.join(", "),
-            _ => "*".to_string(),
-        }
-    };
-
-    // Build WHERE clause — always include rowid filter + any user where clauses
-    let mut where_parts = vec![format!("rowid IN ({})", placeholders.join(", "))];
-    for (col, val) in where_clauses {
-        where_parts.push(format!("{} = '{}'", col, val.replace('\'', "''")));
-    }
-
-    let group_clause = group_by
-        .map(|gb| format!(" GROUP BY {}", gb))
-        .unwrap_or_default();
-
-    let sql = format!(
-        "SELECT {} FROM data WHERE {}{} LIMIT {}",
-        select_clause,
-        where_parts.join(" AND "),
-        group_clause,
-        limit
-    );
-
-    db_query::execute_query_to_json(&db, &sql)
 }
 
 fn inject_distances(rows: &mut [serde_json::Value], distances: &HashMap<i64, f64>) {

@@ -1,12 +1,14 @@
+use crate::db;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
 use axum::extract::State;
 use axum::response::Response;
 use axum::Json;
-use geo::Contains;
+use geo::{BoundingRect, Contains};
 use geo_types::Polygon;
 use geojson::GeoJson;
+use rstar::AABB;
 
 pub async fn within(
     State(state): State<AppState>,
@@ -14,10 +16,30 @@ pub async fn within(
 ) -> Result<Response, AppError> {
     let polygons = extract_polygons(&body)?;
 
-    // Test each point in the index
+    let mut min_lon = f64::MAX;
+    let mut min_lat = f64::MAX;
+    let mut max_lon = f64::MIN;
+    let mut max_lat = f64::MIN;
+    let mut has_bounds = false;
+    for poly in &polygons {
+        if let Some(rect) = poly.bounding_rect() {
+            min_lon = min_lon.min(rect.min().x);
+            min_lat = min_lat.min(rect.min().y);
+            max_lon = max_lon.max(rect.max().x);
+            max_lat = max_lat.max(rect.max().y);
+            has_bounds = true;
+        }
+    }
+    if !has_bounds {
+        return Err(AppError::BadRequest(
+            "Could not compute bounding box for the provided polygons".into(),
+        ));
+    }
+    let envelope = AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
+
     let matching_rowids: Vec<i64> = state
         .index
-        .iter()
+        .locate_in_envelope(&envelope)
         .filter(|pt| {
             let point = geo_types::Point::new(pt.lon, pt.lat);
             polygons.iter().any(|poly| poly.contains(&point))
@@ -25,12 +47,7 @@ pub async fn within(
         .map(|pt| pt.rowid)
         .collect();
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
-    let rows = crate::db::query::fetch_rows_by_ids(&db, &matching_rowids, None)?;
-    drop(db);
+    let rows = db::query::get_rows_by_ids(&state.db, &matching_rowids)?;
 
     output::format_response(&rows, "json", &state)
 }

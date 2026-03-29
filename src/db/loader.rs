@@ -3,44 +3,62 @@ use duckdb::Connection;
 use std::path::Path;
 use tracing::info;
 
-pub fn ingest_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
+/// Ingest a file into DuckDB as a view named `data`.
+/// Adds a `rowid` column via ROW_NUMBER() for spatial index cross-referencing.
+pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
 
-    info!(ext = %extension, "ingesting file");
+    let path_str = path.to_string_lossy();
+
+    info!(ext = %extension, "loading file via DuckDB");
 
     match extension.as_str() {
         "csv" => {
             conn.execute_batch(&format!(
-                "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM read_csv_auto('{}')",
-                path.display()
-            ))?;
+                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_csv_auto('{}')",
+                escape_sql_string(&path_str)
+            ))
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("CSV ingestion error: {}", e)))?;
         }
         "parquet" => {
             conn.execute_batch(&format!(
-                "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM read_parquet('{}')",
-                path.display()
-            ))?;
+                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_parquet('{}')",
+                escape_sql_string(&path_str)
+            ))
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
         }
         "geojson" | "json" => {
-            conn.execute_batch("INSTALL spatial; LOAD spatial;")?;
+            conn.execute_batch("INSTALL spatial; LOAD spatial;")
+                .map_err(|e| {
+                    AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e))
+                })?;
             conn.execute_batch(&format!(
-                "CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM ST_Read('{}')",
-                path.display()
-            ))?;
+                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
+                escape_sql_string(&path_str)
+            ))
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("GeoJSON ingestion error: {}", e)))?;
         }
         "duckdb" => {
             let tbl = table.ok_or_else(|| {
-                AppError::BadRequest("--table is required for .duckdb files".into())
+                AppError::BadRequest(
+                    "For .duckdb files, specify --table <TABLE> to select the table".into(),
+                )
             })?;
+            // Attach the file and create a view
             conn.execute_batch(&format!(
-                "ATTACH '{}' AS src; CREATE TABLE data AS SELECT row_number() OVER () AS rowid, * FROM src.{}",
-                path.display(),
+                "ATTACH '{}' AS source (READ_ONLY);",
+                escape_sql_string(&path_str)
+            ))
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB attach error: {}", e)))?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM source.{}",
                 tbl
-            ))?;
+            ))
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB table read error: {}", e)))?;
         }
         _ => {
             return Err(AppError::BadRequest(format!(
@@ -50,8 +68,15 @@ pub fn ingest_file(conn: &Connection, path: &Path, table: Option<&str>) -> Resul
         }
     }
 
-    let row_count: i64 = conn.query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))?;
-    info!(rows = row_count, "file ingested");
+    // Create the canonical `data` view that all downstream SQL uses
+    conn.execute_batch("CREATE VIEW data AS SELECT * FROM raw_data")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("View creation error: {}", e)))?;
+
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("COUNT error: {}", e)))?;
+
+    info!(rows = row_count, "file loaded into DuckDB");
 
     Ok(())
 }
@@ -68,25 +93,25 @@ const LON_CANDIDATES: &[&str] = &[
     "geo_lng",
 ];
 
+/// Detect lat/lon column names from the schema.
 pub fn detect_lat_lon(
-    conn: &Connection,
+    col_names: &[String],
     lat_override: Option<&str>,
     lon_override: Option<&str>,
 ) -> Result<(String, String), AppError> {
-    let columns = get_column_names(conn)?;
-    let col_lower: Vec<String> = columns.iter().map(|c| c.to_lowercase()).collect();
+    let col_lower: Vec<String> = col_names.iter().map(|c| c.to_lowercase()).collect();
 
     let lat_col = if let Some(l) = lat_override {
         if !col_lower.contains(&l.to_lowercase()) {
             return Err(AppError::ColumnNotFound(format!(
                 "'{}'. Available: {}",
                 l,
-                columns.join(", ")
+                col_names.join(", ")
             )));
         }
         l.to_string()
     } else {
-        detect_column(&columns, &col_lower, LAT_CANDIDATES, "latitude")?
+        detect_column(col_names, &col_lower, LAT_CANDIDATES, "latitude")?
     };
 
     let lon_col = if let Some(l) = lon_override {
@@ -94,12 +119,12 @@ pub fn detect_lat_lon(
             return Err(AppError::ColumnNotFound(format!(
                 "'{}'. Available: {}",
                 l,
-                columns.join(", ")
+                col_names.join(", ")
             )));
         }
         l.to_string()
     } else {
-        detect_column(&columns, &col_lower, LON_CANDIDATES, "longitude")?
+        detect_column(col_names, &col_lower, LON_CANDIDATES, "longitude")?
     };
 
     Ok((lat_col, lon_col))
@@ -123,11 +148,6 @@ fn detect_column(
     )))
 }
 
-fn get_column_names(conn: &Connection) -> Result<Vec<String>, AppError> {
-    let mut stmt = conn.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'data' ORDER BY ordinal_position")?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(names)
+fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
 }

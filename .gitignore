@@ -1,2 +1,4 @@
 /target
 Cargo.lock
+testdata/bench_*.csv
+testdata/bench_*.csv.gz

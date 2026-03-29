@@ -28,9 +28,9 @@ pub async fn schema(State(state): State<AppState>) -> Json<Value> {
 pub async fn stats(State(state): State<AppState>) -> Json<Value> {
     let s = &state.schema;
     let index = &state.index;
-    let envelope = index.root().envelope();
 
     let (min_lat, min_lon, max_lat, max_lon) = if index.size() > 0 {
+        let envelope = index.root().envelope();
         let lower = envelope.lower();
         let upper = envelope.upper();
         (lower[1], lower[0], upper[1], upper[0])
