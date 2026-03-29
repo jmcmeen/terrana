@@ -7,10 +7,11 @@ use axum::response::Response;
 use geo::{Distance, Geodesic};
 use geo_types::Point;
 use rstar::AABB;
+use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct QueryParams {
     pub lat: Option<f64>,
     pub lon: Option<f64>,
@@ -18,6 +19,7 @@ pub struct QueryParams {
     pub bbox: Option<String>,
     pub nearest: Option<usize>,
     pub select: Option<String>,
+    #[serde(rename = "where")]
     pub where_filter: Option<String>,
     pub group_by: Option<String>,
     pub agg: Option<String>,

@@ -6,13 +6,25 @@ use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
+/// Build a `rowid IN (1,2,3)` SQL fragment from an id slice.
+fn rowid_in_clause(ids: &[i64]) -> String {
+    let csv: String = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("rowid IN ({})", csv)
+}
+
 /// Fetch rows by rowid list. Returns all columns as JSON objects.
 pub fn get_rows_by_ids(db: &Mutex<Connection>, ids: &[i64]) -> Result<Vec<Value>, AppError> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let placeholders = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT * FROM data WHERE rowid IN ({}) ORDER BY rowid", placeholders);
+    let sql = format!(
+        "SELECT * FROM data WHERE {} ORDER BY rowid",
+        rowid_in_clause(ids)
+    );
     execute_query_to_json(db, &sql)
 }
 
@@ -51,25 +63,22 @@ pub fn query(
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        conditions.push(format!("rowid IN ({})", placeholders));
+        conditions.push(rowid_in_clause(ids));
     }
 
     // Where clauses
     for (col, val) in where_clauses {
         db::validate_column_name(col)?;
-        conditions.push(format!("CAST(\"{}\" AS VARCHAR) = '{}'", col, escape_sql_value(val)));
+        conditions.push(format!(
+            "CAST(\"{}\" AS VARCHAR) = '{}'",
+            col,
+            escape_sql_value(val)
+        ));
     }
 
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&conditions.join(" AND "));
-    }
-
-    // Preserve rowid ordering when we have spatial candidates
-    if ids.is_some() {
-        // No extra ORDER BY — the IN list order isn't guaranteed but that's fine,
-        // callers that need ordering (radius, nearest) sort after injection.
     }
 
     sql.push_str(&format!(" LIMIT {}", limit));
@@ -103,10 +112,7 @@ fn query_aggregate(
         "COUNT(*) AS count".to_string()
     };
 
-    let mut sql = format!(
-        "SELECT \"{}\", {} FROM data",
-        group_by, agg_expr
-    );
+    let mut sql = format!("SELECT \"{}\", {} FROM data", group_by, agg_expr);
 
     let mut conditions = Vec::new();
 
@@ -114,13 +120,16 @@ fn query_aggregate(
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        conditions.push(format!("rowid IN ({})", placeholders));
+        conditions.push(rowid_in_clause(ids));
     }
 
     for (col, val) in where_clauses {
         db::validate_column_name(col)?;
-        conditions.push(format!("CAST(\"{}\" AS VARCHAR) = '{}'", col, escape_sql_value(val)));
+        conditions.push(format!(
+            "CAST(\"{}\" AS VARCHAR) = '{}'",
+            col,
+            escape_sql_value(val)
+        ));
     }
 
     if !conditions.is_empty() {
@@ -136,7 +145,7 @@ fn query_aggregate(
 
 /// Execute a SQL query and return results as Vec<serde_json::Value>.
 fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = db::lock_db(db)?;
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL prepare error: {} — {}", e, sql)))?;
@@ -145,15 +154,21 @@ fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>
         .query([])
         .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL query error: {} — {}", e, sql)))?;
 
-    // Column names and types are available only after query execution in duckdb crate
-    let stmt_ref = rows.as_ref().unwrap();
+    // Column metadata is available via the Statement backing the Rows.
+    // rows.as_ref() returns Option<&Statement> — None only if the Rows was
+    // created without a statement, which cannot happen via query().
+    let stmt_ref = rows
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No statement backing query results")))?;
     let col_count = stmt_ref.column_count();
     let col_names: Vec<String> = (0..col_count)
-        .map(|i| stmt_ref.column_name(i).map_or("?".to_string(), |v| v.to_string()))
+        .map(|i| {
+            stmt_ref
+                .column_name(i)
+                .map_or("?".to_string(), |v| v.to_string())
+        })
         .collect();
-    let col_types: Vec<DataType> = (0..col_count)
-        .map(|i| stmt_ref.column_type(i))
-        .collect();
+    let col_types: Vec<DataType> = (0..col_count).map(|i| stmt_ref.column_type(i)).collect();
 
     let mut rows_out = Vec::new();
     while let Some(row) = rows
@@ -175,26 +190,37 @@ fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>
 /// using the Arrow DataType to pick the right conversion.
 fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Value {
     match col_type {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-        | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            match row.get::<_, i64>(idx) {
-                Ok(v) => json!(v),
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32 => match row.get::<_, i64>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
+        DataType::UInt64 => {
+            // u64 can exceed i64::MAX, so read as u64 and serialize carefully
+            match row.get::<_, u64>(idx) {
+                Ok(v) if v <= i64::MAX as u64 => json!(v),
+                Ok(v) => json!(v.to_string()),
                 Err(_) => Value::Null,
             }
         }
-        DataType::Float16 | DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-            match row.get::<_, f64>(idx) {
-                Ok(v) if v.is_nan() || v.is_infinite() => Value::Null,
-                Ok(v) => json!(v),
-                Err(_) => Value::Null,
-            }
-        }
-        DataType::Boolean => {
-            match row.get::<_, bool>(idx) {
-                Ok(v) => json!(v),
-                Err(_) => Value::Null,
-            }
-        }
+        DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => match row.get::<_, f64>(idx) {
+            Ok(v) if v.is_nan() || v.is_infinite() => Value::Null,
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
+        DataType::Boolean => match row.get::<_, bool>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
         DataType::Date32 => {
             // Date32 = days since Unix epoch
             match row.get::<_, i32>(idx) {
@@ -239,7 +265,7 @@ pub fn scan_lat_lon(
     lat_col: &str,
     lon_col: &str,
 ) -> Result<Vec<(i64, f64, f64)>, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = db::lock_db(db)?;
     let sql = format!(
         "SELECT rowid, \"{}\", \"{}\" FROM data WHERE \"{}\" IS NOT NULL AND \"{}\" IS NOT NULL",
         lat_col, lon_col, lat_col, lon_col
@@ -256,9 +282,15 @@ pub fn scan_lat_lon(
         .next()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon row: {}", e)))?
     {
-        let rowid: i64 = row.get(0).unwrap();
-        let lat: f64 = row.get(1).unwrap();
-        let lon: f64 = row.get(2).unwrap();
+        let rowid: i64 = row
+            .get(0)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon rowid: {}", e)))?;
+        let lat: f64 = row
+            .get(1)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lat: {}", e)))?;
+        let lon: f64 = row
+            .get(2)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lon: {}", e)))?;
         points.push((rowid, lat, lon));
     }
 
