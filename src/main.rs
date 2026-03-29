@@ -98,9 +98,15 @@ async fn main() -> anyhow::Result<()> {
                         lat = lat_col,
                         lon = lon_col,
                     ))?;
-                let result: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) =
-                    stmt.query_row([], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                let result: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) = stmt
+                    .query_row([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
                     })?;
                 let bbox = match result {
                     (Some(min_lat), Some(min_lon), Some(max_lat), Some(max_lon), _) => {

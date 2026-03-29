@@ -69,7 +69,9 @@ fn extract_geometry_geojson(body: &serde_json::Value) -> Result<String, AppError
                             }
                         }
                         Some("MultiPolygon") => {
-                            if let Some(coords) = geom_json.get("coordinates").and_then(|c| c.as_array()) {
+                            if let Some(coords) =
+                                geom_json.get("coordinates").and_then(|c| c.as_array())
+                            {
                                 for poly_coords in coords {
                                     all_polys.push(poly_coords.clone());
                                 }

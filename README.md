@@ -176,13 +176,13 @@ If you use Terrana in academic research, please cite it as:
 ```bibtex
 @software{terrana,
   title  = {Terrana: Zero-Config Spatial API Server},
-  url    = {https://github.com/your-org/terrana},
-  year   = {2024},
+  url    = {https://github.com/jmcmeen/terrana},
+  year   = {2026},
   note   = {Rust-based spatial query server using DuckDB and R-tree indexing}
 }
 ```
 
-Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/your-org/terrana>*
+Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/your-org/terrana>*
 
 ## Contributing
 
@@ -197,7 +197,7 @@ Contributions are welcome. Here are some ways to get involved:
 ### Getting started
 
 ```bash
-git clone https://github.com/your-org/terrana.git
+git clone https://github.com/jmcmeen/terrana.git
 cd terrana
 cargo build
 cargo run -- serve testdata/observations.csv

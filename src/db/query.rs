@@ -19,13 +19,24 @@ pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> St
 /// WHERE fragment for radius: bbox envelope + ST_Distance_Sphere.
 pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
     let deg_offset = radius_m / 111_000.0 * 1.5;
-    let bbox = bbox_filter(lat - deg_offset, lon - deg_offset, lat + deg_offset, lon + deg_offset);
-    format!("{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}", bbox, lon, lat, radius_m)
+    let bbox = bbox_filter(
+        lat - deg_offset,
+        lon - deg_offset,
+        lat + deg_offset,
+        lon + deg_offset,
+    );
+    format!(
+        "{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
+        bbox, lon, lat, radius_m
+    )
 }
 
 /// SELECT expression for distance in km (haversine via ST_Distance_Sphere).
 pub fn distance_select(lat: f64, lon: f64) -> String {
-    format!("ST_Distance_Sphere(geom, ST_Point({}, {})) / 1000.0 AS _distance_km", lon, lat)
+    format!(
+        "ST_Distance_Sphere(geom, ST_Point({}, {})) / 1000.0 AS _distance_km",
+        lon, lat
+    )
 }
 
 /// WHERE fragment for point-in-polygon using ST_Contains (R-tree accelerated).
@@ -41,6 +52,7 @@ pub fn within_filter_geojson(geojson_str: &str) -> String {
 /// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
 /// When `spatial_where` is provided, queries `raw_data` (has geom + R-tree index)
 /// and excludes geom from output. Otherwise queries the `data` view.
+#[allow(clippy::too_many_arguments)]
 pub fn query(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
@@ -58,7 +70,11 @@ pub fn query(
         return query_aggregate(db, spatial_where, where_clauses, gb, a, limit);
     }
 
-    let table = if spatial_where.is_some() { "raw_data" } else { "data" };
+    let table = if spatial_where.is_some() {
+        "raw_data"
+    } else {
+        "data"
+    };
 
     let select = match select_cols {
         Some(cols) => {
@@ -73,7 +89,11 @@ pub fn query(
             s
         }
         None => {
-            let base = if spatial_where.is_some() { "* EXCLUDE (geom)" } else { "*" };
+            let base = if spatial_where.is_some() {
+                "* EXCLUDE (geom)"
+            } else {
+                "*"
+            };
             let mut s = String::from(base);
             if let Some(extra) = extra_select {
                 s.push_str(", ");
@@ -140,7 +160,11 @@ fn query_aggregate(
         "COUNT(*) AS count".to_string()
     };
 
-    let table2 = if spatial_where.is_some() { "raw_data" } else { "data" };
+    let table2 = if spatial_where.is_some() {
+        "raw_data"
+    } else {
+        "data"
+    };
     let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
 
     let mut conditions = Vec::new();
@@ -179,6 +203,8 @@ pub fn query_points_in_bbox(
     max_lat: f64,
     max_lon: f64,
 ) -> Result<Vec<(f64, f64)>, AppError> {
+    db::validate_column_name(lat_col)?;
+    db::validate_column_name(lon_col)?;
     let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
     let sql = format!(
         "SELECT \"{}\", \"{}\" FROM raw_data WHERE {}",
@@ -217,7 +243,10 @@ pub fn query_rows_in_bbox(
     limit: usize,
 ) -> Result<Vec<Value>, AppError> {
     let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
-    let sql = format!("SELECT * EXCLUDE (geom) FROM raw_data WHERE {} LIMIT {}", filter, limit);
+    let sql = format!(
+        "SELECT * EXCLUDE (geom) FROM raw_data WHERE {} LIMIT {}",
+        filter, limit
+    );
     execute_query_to_json(db, &sql)
 }
 
@@ -275,13 +304,11 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Ok(v) => json!(v),
             Err(_) => Value::Null,
         },
-        DataType::UInt64 => {
-            match row.get::<_, u64>(idx) {
-                Ok(v) if v <= i64::MAX as u64 => json!(v),
-                Ok(v) => json!(v.to_string()),
-                Err(_) => Value::Null,
-            }
-        }
+        DataType::UInt64 => match row.get::<_, u64>(idx) {
+            Ok(v) if v <= i64::MAX as u64 => json!(v),
+            Ok(v) => json!(v.to_string()),
+            Err(_) => Value::Null,
+        },
         DataType::Float16
         | DataType::Float32
         | DataType::Float64
@@ -295,36 +322,28 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Ok(v) => json!(v),
             Err(_) => Value::Null,
         },
-        DataType::Date32 => {
-            match row.get::<_, i32>(idx) {
-                Ok(days) => {
-                    let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
-                        .map(|d| d.format("%Y-%m-%d").to_string());
-                    match date {
-                        Some(s) => json!(s),
-                        None => json!(days),
-                    }
-                }
-                Err(_) => Value::Null,
-            }
-        }
-        DataType::Date64 | DataType::Timestamp(_, _) => {
-            match row.get::<_, String>(idx) {
-                Ok(v) => json!(v),
-                Err(_) => {
-                    match row.get::<_, i64>(idx) {
-                        Ok(v) => json!(v),
-                        Err(_) => Value::Null,
-                    }
+        DataType::Date32 => match row.get::<_, i32>(idx) {
+            Ok(days) => {
+                let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                    .map(|d| d.format("%Y-%m-%d").to_string());
+                match date {
+                    Some(s) => json!(s),
+                    None => json!(days),
                 }
             }
-        }
-        _ => {
-            match row.get::<_, String>(idx) {
+            Err(_) => Value::Null,
+        },
+        DataType::Date64 | DataType::Timestamp(_, _) => match row.get::<_, String>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => match row.get::<_, i64>(idx) {
                 Ok(v) => json!(v),
                 Err(_) => Value::Null,
-            }
-        }
+            },
+        },
+        _ => match row.get::<_, String>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
     }
 }
 

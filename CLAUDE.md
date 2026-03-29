@@ -337,7 +337,7 @@ These apply to every geometry calculation in this codebase:
 - **Buffer ring vertices** → `geo::GeodesicDestination::geodesic_destination(origin, bearing, distance_m)`.
 - **Convex hull shape** → computed on 2D lat/lon (acceptable); area of that hull → geodesic.
 - **Query path distances** (radius, nearest) → `ST_Distance_Sphere` (haversine, via DuckDB). Accurate to ~0.3% vs ellipsoidal — sufficient for spatial filtering and `_distance_km` values.
-- **Geometry endpoint distances** (`/geometry/distance`, `/geometry/bounds`) → `geo::Geodesic::distance()` (ellipsoidal, high precision).
+- **Geometry endpoint distances** (`/geometry/distance`, `/geometry/bounds`) → `geo::GeodesicDistance::geodesic_distance()` (ellipsoidal, high precision).
 - Haversine is acceptable for all query-path distance calculations. Ellipsoidal math is required only for geometry endpoints where precision matters (area, perimeter, explicit distance calculations).
 
 ---

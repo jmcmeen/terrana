@@ -45,7 +45,7 @@ done
 
 # Grab startup stats
 STATS=$(curl -s "$BASE/stats")
-INDEX_SIZE=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['index_size'])")
+INDEX_SIZE=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['spatial_points'])")
 BUILD_MS=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['index_build_ms'])")
 
 echo ""

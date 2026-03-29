@@ -33,7 +33,9 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
         }
         "geojson" | "json" => {
             conn.execute_batch("INSTALL spatial; LOAD spatial;")
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
+                .map_err(|e| {
+                    AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e))
+                })?;
             conn.execute_batch(&format!(
                 "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
