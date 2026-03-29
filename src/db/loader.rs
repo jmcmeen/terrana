@@ -32,7 +32,8 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
         }
         "geojson" | "json" => {
-            crate::db::ensure_spatial(conn)?;
+            conn.execute_batch("INSTALL spatial; LOAD spatial;")
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
             conn.execute_batch(&format!(
                 "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
@@ -145,69 +146,28 @@ fn detect_column(
     )))
 }
 
-/// Add a geometry column and R-tree index to raw_data, then recreate the data view excluding geom.
-pub fn add_spatial_index(
+/// Create indexes on lat/lon columns for efficient spatial filtering.
+/// Uses plain DuckDB indexes (no spatial extension) for maximum compatibility.
+pub fn create_spatial_indexes(
     conn: &duckdb::Connection,
     lat_col: &str,
     lon_col: &str,
 ) -> Result<(), AppError> {
-    info!(lat = %lat_col, lon = %lon_col, "building spatial index");
+    info!(lat = %lat_col, lon = %lon_col, "creating lat/lon indexes");
 
-    // Load spatial extension (deferred until after CSV ingestion to avoid crashes)
-    crate::db::ensure_spatial(conn)?;
-
-    // Create a new table with geometry column via SELECT (avoids ALTER TABLE + UPDATE bug)
     conn.execute_batch(&format!(
-        "CREATE TABLE spatial_data AS SELECT *, ST_Point(\"{lon}\", \"{lat}\") AS geom FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
+        "CREATE INDEX idx_lat ON raw_data (\"{lat}\")",
         lat = lat_col,
+    ))
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Lat index error: {}", e)))?;
+
+    conn.execute_batch(&format!(
+        "CREATE INDEX idx_lon ON raw_data (\"{lon}\")",
         lon = lon_col,
     ))
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial table creation error: {}", e)))?;
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Lon index error: {}", e)))?;
 
-    // Drop old raw_data, rename spatial_data
-    conn.execute_batch("DROP TABLE raw_data")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop raw_data error: {}", e)))?;
-    conn.execute_batch("ALTER TABLE spatial_data RENAME TO raw_data")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Rename table error: {}", e)))?;
-
-    // Create R-tree index
-    conn.execute_batch("CREATE INDEX spatial_idx ON raw_data USING RTREE(geom)")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("R-tree index error: {}", e)))?;
-
-    // Recreate the data view excluding the geom column
-    conn.execute_batch("DROP VIEW IF EXISTS data")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Drop view error: {}", e)))?;
-
-    // Build column list excluding geom via DESCRIBE
-    let mut cols = Vec::new();
-    let mut stmt = conn
-        .prepare("DESCRIBE raw_data")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE error: {}", e)))?;
-    let mut rows = stmt
-        .query([])
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE query error: {}", e)))?;
-    while let Some(row) = rows
-        .next()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE row error: {}", e)))?
-    {
-        let name: String = row
-            .get(0)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Column name error: {}", e)))?;
-        if name != "geom" {
-            cols.push(format!("\"{}\"", name));
-        }
-    }
-    drop(rows);
-    drop(stmt);
-
-    let col_list = cols.join(", ");
-    conn.execute_batch(&format!(
-        "CREATE VIEW data AS SELECT {} FROM raw_data",
-        col_list
-    ))
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Recreate view error: {}", e)))?;
-
-    info!("spatial index created");
+    info!("lat/lon indexes created");
     Ok(())
 }
 

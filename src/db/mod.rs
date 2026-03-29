@@ -5,8 +5,8 @@ use crate::error::AppError;
 use duckdb::Connection;
 use std::sync::{Mutex, MutexGuard};
 
-/// Load the DuckDB spatial extension. Called lazily before spatial index creation,
-/// NOT at connection time — loading it early interferes with CSV ingestion at scale.
+/// Load the DuckDB spatial extension. Called AFTER file ingestion,
+/// never at connection time — loading it early crashes DuckDB on large CSV files.
 pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("INSTALL spatial; LOAD spatial;")
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
