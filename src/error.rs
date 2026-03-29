@@ -13,6 +13,8 @@ pub enum AppError {
     FileNotFound(String),
     #[error("Geometry error: {0}")]
     Geometry(String),
+    #[error("Database error: {0}")]
+    Database(#[from] duckdb::Error),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -25,6 +27,7 @@ impl IntoResponse for AppError {
             }
             AppError::FileNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Geometry(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Database(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
 

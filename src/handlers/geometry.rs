@@ -1,3 +1,4 @@
+use crate::db;
 use crate::error::AppError;
 use crate::server::AppState;
 use axum::extract::State;
@@ -221,9 +222,9 @@ pub async fn dissolve(
             .map(|p| p.rowid)
             .collect();
 
-        state.table.get_rows_by_ids(&rowids)
+        db::query::get_rows_by_ids(&state.db, &rowids)?
     } else {
-        state.table.query(None, &[], None, None, None, 100_000)?
+        db::query::query(&state.db, None, &[], None, None, None, 100_000)?
     };
 
     let lat_col = &state.schema.lat_col;

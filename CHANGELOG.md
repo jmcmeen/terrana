@@ -21,7 +21,7 @@ All notable changes to Terrana will be documented in this file.
 - Tracing/logging with `RUST_LOG` env filter
 - GitHub Actions CI (check, clippy, fmt, cross-platform build) and release workflows
 - Dockerfile and docker-compose.yml for containerized deployment
-- MIT License
+
 
 ### Security
 

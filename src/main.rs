@@ -1,17 +1,17 @@
 mod cli;
 mod config;
+mod db;
 mod error;
 mod handlers;
 mod index;
 mod output;
 mod server;
-mod store;
 
 use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
 use server::{AppState, ColumnMeta, TableSchema};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
             file,
             lat,
             lon,
+            table,
             port,
             bind,
             watch,
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
                 file: file.clone(),
                 lat_col: lat.clone(),
                 lon_col: lon.clone(),
+                table: table.clone(),
                 port,
                 bind: bind.clone(),
                 watch,
@@ -51,28 +53,35 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("File not found: {}", file.display());
             }
 
-            // Load file into memory
+            // Create DuckDB connection and load file
             let abs_path = std::fs::canonicalize(&file)?;
-            let data_table = store::loader::load_file(&abs_path)?;
+            let conn = db::create_connection()?;
+            db::loader::load_file(&conn, &abs_path, table.as_deref())?;
+
+            let db_mutex = Arc::new(Mutex::new(conn));
+
+            // Get schema info
+            let table_info = db::get_table_info(&db_mutex)?;
 
             // Detect lat/lon columns
             let (lat_col, lon_col) =
-                store::loader::detect_lat_lon(&data_table, lat.as_deref(), lon.as_deref())?;
+                db::loader::detect_lat_lon(&table_info.col_names, lat.as_deref(), lon.as_deref())?;
             info!(lat = %lat_col, lon = %lon_col, "columns detected");
 
             // Build R-tree index
             let start_build = Instant::now();
-            let tree = index::build::build_rtree(&data_table, &lat_col, &lon_col);
+            let tree = index::build::build_rtree(&db_mutex, &lat_col, &lon_col)?;
             let index_build_ms = start_build.elapsed().as_millis();
 
             let schema = TableSchema {
                 source: file.display().to_string(),
-                row_count: data_table.row_count,
+                row_count: table_info.row_count,
                 lat_col,
                 lon_col,
-                columns: data_table
-                    .columns
+                columns: table_info
+                    .col_names
                     .iter()
+                    .zip(table_info.col_types.iter())
                     .map(|(name, dtype)| ColumnMeta {
                         name: name.clone(),
                         dtype: dtype.clone(),
@@ -82,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
             let state = AppState {
                 config: Arc::new(config),
-                table: Arc::new(data_table),
+                db: db_mutex,
                 index: Arc::new(tree),
                 schema: Arc::new(schema),
                 start_time: Instant::now(),

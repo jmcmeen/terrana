@@ -1,17 +1,16 @@
+use crate::db;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
-use crate::store;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use geo::{Distance, Geodesic};
 use geo_types::Point;
 use rstar::AABB;
-use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct QueryParams {
     pub lat: Option<f64>,
     pub lon: Option<f64>,
@@ -19,7 +18,6 @@ pub struct QueryParams {
     pub bbox: Option<String>,
     pub nearest: Option<usize>,
     pub select: Option<String>,
-    #[serde(rename = "where")]
     pub where_filter: Option<String>,
     pub group_by: Option<String>,
     pub agg: Option<String>,
@@ -37,17 +35,17 @@ pub async fn query(
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
-    // Validate column names in where clauses and select
+    // Validate column names
     for (col, _) in &where_clauses {
-        store::validate_column_name(col)?;
+        db::validate_column_name(col)?;
     }
     if let Some(ref cols) = select_cols {
         for col in cols {
-            store::validate_column_name(col)?;
+            db::validate_column_name(col)?;
         }
     }
     if let Some(ref gb) = qp.group_by {
-        store::validate_column_name(gb)?;
+        db::validate_column_name(gb)?;
     }
 
     if let Some(bbox_str) = &qp.bbox {
@@ -63,7 +61,8 @@ pub async fn query(
             .map(|p| p.rowid)
             .collect();
 
-        let rows = state.table.query(
+        let rows = db::query::query(
+            &state.db,
             Some(&candidates),
             &where_clauses,
             select_cols.as_deref(),
@@ -88,7 +87,8 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = state.table.query(
+        let mut rows = db::query::query(
+            &state.db,
             Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
@@ -114,7 +114,7 @@ pub async fn query(
         let radius_m = parse_radius(radius_str)?;
         let origin = Point::new(lon, lat);
 
-        let deg_offset = radius_m / 111_000.0 * 1.5; // generous buffer
+        let deg_offset = radius_m / 111_000.0 * 1.5;
         let envelope = AABB::from_corners(
             [lon - deg_offset, lat - deg_offset],
             [lon + deg_offset, lat + deg_offset],
@@ -136,7 +136,8 @@ pub async fn query(
 
         let rowids: Vec<i64> = results.iter().map(|r| r.0).collect();
         let distances: HashMap<i64, f64> = results.into_iter().collect();
-        let mut rows = state.table.query(
+        let mut rows = db::query::query(
+            &state.db,
             Some(&rowids),
             &where_clauses,
             select_cols.as_deref(),
@@ -159,7 +160,8 @@ pub async fn query(
         output::format_response(&rows, format, &state)
     } else {
         // No spatial filter — plain table query
-        let rows = state.table.query(
+        let rows = db::query::query(
+            &state.db,
             None,
             &where_clauses,
             select_cols.as_deref(),

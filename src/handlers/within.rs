@@ -1,3 +1,4 @@
+use crate::db;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
@@ -39,7 +40,7 @@ pub async fn within(
         .map(|pt| pt.rowid)
         .collect();
 
-    let rows = state.table.get_rows_by_ids(&matching_rowids);
+    let rows = db::query::get_rows_by_ids(&state.db, &matching_rowids)?;
 
     output::format_response(&rows, "json", &state)
 }
