@@ -5,18 +5,18 @@ use crate::error::AppError;
 use duckdb::Connection;
 use std::sync::{Mutex, MutexGuard};
 
-/// Load the DuckDB spatial extension.
-fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
+/// Load the DuckDB spatial extension. Called lazily before spatial index creation,
+/// NOT at connection time — loading it early interferes with CSV ingestion at scale.
+pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("INSTALL spatial; LOAD spatial;")
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
     Ok(())
 }
 
-/// Create an in-memory DuckDB connection with spatial extension.
+/// Create an in-memory DuckDB connection.
 pub fn create_connection() -> Result<Connection, AppError> {
     let conn = Connection::open_in_memory()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB init error: {}", e)))?;
-    ensure_spatial(&conn)?;
     Ok(conn)
 }
 
@@ -28,7 +28,6 @@ pub fn create_disk_connection() -> Result<(Connection, tempfile::TempDir), AppEr
     let db_path = tmp_dir.path().join("terrana.duckdb");
     let conn = Connection::open(&db_path)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB disk init error: {}", e)))?;
-    ensure_spatial(&conn)?;
     Ok((conn, tmp_dir))
 }
 
