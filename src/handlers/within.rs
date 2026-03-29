@@ -38,53 +38,64 @@ fn extract_geometry_geojson(body: &serde_json::Value) -> Result<String, AppError
         .parse::<GeoJson>()
         .map_err(|e| AppError::BadRequest(format!("Invalid GeoJSON: {}", e)))?;
 
-    // We need to extract just the geometry as a GeoJSON string for ST_GeomFromGeoJSON.
-    // For multi-polygon or feature collections with multiple polygons, we union them.
     match geojson {
-        GeoJson::Geometry(ref geom) => {
-            validate_polygon_geometry(geom)?;
+        GeoJson::Geometry(geom) => {
+            validate_polygon_geometry(&geom)?;
             Ok(geom.to_string())
         }
-        GeoJson::Feature(ref feat) => {
+        GeoJson::Feature(feat) => {
             let geom = feat
                 .geometry
-                .as_ref()
                 .ok_or_else(|| AppError::BadRequest("Feature has no geometry".into()))?;
-            validate_polygon_geometry(geom)?;
+            validate_polygon_geometry(&geom)?;
             Ok(geom.to_string())
         }
-        GeoJson::FeatureCollection(ref fc) => {
-            // Collect all polygon geometries and create a single MultiPolygon
-            let mut all_coords: Vec<Vec<Vec<Vec<f64>>>> = Vec::new();
+        GeoJson::FeatureCollection(fc) => {
+            // For a collection, pass through the first polygon geometry found,
+            // or combine into a single geometry for ST_Contains.
+            // Simplest: just use the raw body as-is isn't valid for ST_GeomFromGeoJSON,
+            // so extract all polygon geometries and merge into a MultiPolygon.
+            let mut all_polys: Vec<serde_json::Value> = Vec::new();
             for feat in &fc.features {
                 if let Some(geom) = &feat.geometry {
-                    match &geom.value {
-                        geojson::Value::Polygon(coords) => {
-                            all_coords.push(coords.clone());
+                    validate_polygon_geometry(geom)?;
+                    // Parse the geometry coordinates
+                    let geom_json: serde_json::Value = serde_json::to_value(geom)
+                        .map_err(|e| AppError::Internal(anyhow::anyhow!("JSON error: {}", e)))?;
+                    match geom_json.get("type").and_then(|t| t.as_str()) {
+                        Some("Polygon") => {
+                            if let Some(coords) = geom_json.get("coordinates") {
+                                all_polys.push(coords.clone());
+                            }
                         }
-                        geojson::Value::MultiPolygon(multi) => {
-                            all_coords.extend(multi.clone());
+                        Some("MultiPolygon") => {
+                            if let Some(coords) = geom_json.get("coordinates").and_then(|c| c.as_array()) {
+                                for poly_coords in coords {
+                                    all_polys.push(poly_coords.clone());
+                                }
+                            }
                         }
-                        _ => {
-                            return Err(AppError::BadRequest(
-                                "Expected Polygon or MultiPolygon geometry".into(),
-                            ));
-                        }
+                        _ => {}
                     }
                 }
             }
-            if all_coords.is_empty() {
+            if all_polys.is_empty() {
                 return Err(AppError::BadRequest("No polygons found in input".into()));
             }
-            let multi = geojson::Geometry::new(geojson::Value::MultiPolygon(all_coords));
+            let multi = serde_json::json!({
+                "type": "MultiPolygon",
+                "coordinates": all_polys,
+            });
             Ok(multi.to_string())
         }
     }
 }
 
 fn validate_polygon_geometry(geom: &geojson::Geometry) -> Result<(), AppError> {
-    match &geom.value {
-        geojson::Value::Polygon(_) | geojson::Value::MultiPolygon(_) => Ok(()),
+    let geom_json: serde_json::Value = serde_json::to_value(geom)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("JSON error: {}", e)))?;
+    match geom_json.get("type").and_then(|t| t.as_str()) {
+        Some("Polygon") | Some("MultiPolygon") => Ok(()),
         _ => Err(AppError::BadRequest(
             "Expected Polygon or MultiPolygon geometry".into(),
         )),
