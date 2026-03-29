@@ -363,38 +363,6 @@ File ingestion creates `raw_data` table, then `add_spatial_index()` adds a `geom
 
 ---
 
-## Build Phases (implement in order, verify each before proceeding)
-
-### Phase 1 — CLI Skeleton
-`clap` args, `Config` struct, `tracing` setup, startup banner.
-**Gate:** `cargo run -- serve --help` prints usage correctly.
-
-### Phase 2 — DuckDB Integration
-File ingestion, `GET /schema`, `GET /stats`, column auto-detection.
-**Gate:** `curl localhost:8080/schema` returns column list for a test CSV.
-
-### Phase 3 — R-tree Index
-Bulk load from DuckDB scan via rayon, stored in AppState.
-**Gate:** index builds in under 1 second on a 100k-row CSV; build time logged.
-
-### Phase 4 — Core Spatial Queries
-`GET /query` (radius, bbox, nearest), `POST /query/within`.
-**Gate:** radius query returns correct rows verified against known test data; `_distance_km` is present and sorted.
-
-### Phase 5 — Output Formats + Filters
-CSV, GeoJSON output; `select=`, `where=`, `limit=`, `group_by=`, `agg=`.
-**Gate:** `?format=geojson` response validates as GeoJSON; `?format=csv` is well-formed.
-
-### Phase 6 — Geometry Endpoints
-All `POST /geometry/*` routes.
-**Gate:** `/geometry/area` on a 1°×1° box at the equator returns ~12,308 km².
-
-### Phase 7 — Polish
-`GET /health`, `--watch` mode, CORS, request logging middleware.
-**Gate:** `cargo build --release` produces a single binary with no external dependencies.
-
----
-
 ## What This Project Is NOT
 
 Do not implement any of the following. If a request seems to push toward them, flag it and stop.
