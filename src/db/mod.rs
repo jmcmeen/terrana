@@ -5,11 +5,30 @@ use crate::error::AppError;
 use duckdb::Connection;
 use std::sync::{Mutex, MutexGuard};
 
+/// Load the DuckDB spatial extension.
+/// Called after file ingestion, NOT at connection time.
+pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch("INSTALL spatial; LOAD spatial;")
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
+    Ok(())
+}
+
 /// Create an in-memory DuckDB connection.
 pub fn create_connection() -> Result<Connection, AppError> {
     let conn = Connection::open_in_memory()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB init error: {}", e)))?;
     Ok(conn)
+}
+
+/// Create an on-disk DuckDB connection using a temp file.
+/// Reduces RAM usage for large datasets by letting DuckDB spill to disk.
+pub fn create_disk_connection() -> Result<(Connection, tempfile::TempDir), AppError> {
+    let tmp_dir = tempfile::tempdir()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create temp dir: {}", e)))?;
+    let db_path = tmp_dir.path().join("terrana.duckdb");
+    let conn = Connection::open(&db_path)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB disk init error: {}", e)))?;
+    Ok((conn, tmp_dir))
 }
 
 /// Lock the database mutex, mapping poisoned-mutex errors into AppError.

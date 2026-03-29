@@ -38,5 +38,9 @@ pub enum Commands {
         /// Re-index when source file changes
         #[arg(long)]
         watch: bool,
+
+        /// Use on-disk DuckDB storage instead of in-memory (reduces RAM usage for large files)
+        #[arg(long)]
+        disk: bool,
     },
 }

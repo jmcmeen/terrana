@@ -27,23 +27,14 @@ pub async fn schema(State(state): State<AppState>) -> Json<Value> {
 
 pub async fn stats(State(state): State<AppState>) -> Json<Value> {
     let s = &state.schema;
-    let index = &state.index;
-
-    let (min_lat, min_lon, max_lat, max_lon) = if index.size() > 0 {
-        let envelope = index.root().envelope();
-        let lower = envelope.lower();
-        let upper = envelope.upper();
-        (lower[1], lower[0], upper[1], upper[0])
-    } else {
-        (0.0, 0.0, 0.0, 0.0)
-    };
+    let (min_lat, min_lon, max_lat, max_lon) = state.spatial_bbox.unwrap_or((0.0, 0.0, 0.0, 0.0));
 
     let centroid_lat = (min_lat + max_lat) / 2.0;
     let centroid_lon = (min_lon + max_lon) / 2.0;
 
     Json(json!({
         "row_count": s.row_count,
-        "index_size": index.size(),
+        "spatial_points": state.spatial_count,
         "index_build_ms": state.index_build_ms,
         "bbox": [min_lat, min_lon, max_lat, max_lon],
         "centroid": {

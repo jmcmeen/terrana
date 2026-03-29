@@ -29,7 +29,7 @@ The binary is called `terrana`. The crate name is `terrana`.
 | HTTP framework | `axum` 0.7 |
 | Async runtime | `tokio` (full features) |
 | Database engine | `duckdb` crate (bundled feature — no system DuckDB needed) |
-| Spatial index | `rstar` (R-tree, pure Rust) |
+| Spatial index | DuckDB spatial extension (R-tree index) |
 | Geometry / geodesics | `geo` crate |
 | GeoJSON types | `geojson` crate (with `geo-types` feature) |
 | CLI | `clap` 4 (derive API) |
@@ -37,7 +37,7 @@ The binary is called `terrana`. The crate name is `terrana`.
 | CSV output | `csv` crate |
 | Error handling | `anyhow` (app-level) + `thiserror` (typed errors) |
 | Logging | `tracing` + `tracing-subscriber` |
-| Parallel index build | `rayon` |
+| Temp file (disk mode) | `tempfile` |
 | File watching | `notify` 6 |
 | Coordinate system | WGS 84 (EPSG:4326) only — no CRS conversion |
 
@@ -62,7 +62,6 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 duckdb = { version = "1", features = ["bundled"] }
-rstar = "0.12"
 geo = "0.29"
 geo-types = "0.7"
 geojson = { version = "1", features = ["geo-types"] }
@@ -74,8 +73,8 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rayon = "1"
 notify = "8"
+tempfile = "3"
 ```
 
 ---
@@ -99,12 +98,9 @@ terrana/
     ├── config.rs              ← resolved Config struct passed through app via Arc
     ├── error.rs               ← AppError enum implementing IntoResponse
     ├── db/
-    │   ├── mod.rs             ← DuckDB connection setup, re-exports
-    │   ├── loader.rs          ← file ingestion by extension (CSV/Parquet/GeoJSON/DuckDB)
-    │   └── query.rs           ← parameterized SQL query builders
-    ├── index/
-    │   ├── mod.rs             ← SpatialPoint type, RTree re-export
-    │   └── build.rs           ← bulk R-tree construction from DuckDB scan
+    │   ├── mod.rs             ← DuckDB connection setup, spatial extension, re-exports
+    │   ├── loader.rs          ← file ingestion, spatial index creation
+    │   └── query.rs           ← SQL query builders, spatial filter helpers
     ├── geometry/
     │   ├── mod.rs             ← re-exports, shared helpers
     │   ├── hull.rs            ← convex hull computation
@@ -139,8 +135,11 @@ The axum router shares this state across all handlers. Clone it freely — the e
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Arc<Mutex<duckdb::Connection>>,  // DuckDB Connection is not Send
-    pub index: Arc<RTree<SpatialPoint>>,
     pub schema: Arc<TableSchema>,
+    pub start_time: Instant,
+    pub index_build_ms: u128,
+    pub spatial_bbox: Option<(f64, f64, f64, f64)>,  // cached at startup
+    pub spatial_count: i64,
 }
 
 pub struct TableSchema {
@@ -190,38 +189,28 @@ pub enum AppError {
 
 ## Spatial Index
 
-```rust
-#[derive(Clone, Debug)]
-pub struct SpatialPoint {
-    pub rowid: i64,
-    pub lat: f64,
-    pub lon: f64,
-}
+The spatial index is managed entirely by DuckDB's spatial extension:
 
-impl RTreeObject for SpatialPoint {
-    type Envelope = AABB<[f64; 2]>;
-    fn envelope(&self) -> Self::Envelope {
-        AABB::from_point([self.lon, self.lat])  // note: lon first (x), lat second (y)
-    }
-}
-```
+1. During startup, `add_spatial_index()` creates a `geom` GEOMETRY column on `raw_data` via `ST_Point(lon, lat)`
+2. An R-tree index is created: `CREATE INDEX spatial_idx ON raw_data USING RTREE(geom)`
+3. The `data` view excludes the `geom` column so it doesn't leak into API responses
+4. Spatial queries use `ST_Intersects`, `ST_Contains`, `ST_Distance_Sphere` on `raw_data` — DuckDB uses the R-tree automatically
 
-Build with `RTree::bulk_load()` after collecting all points via rayon. Log build time at INFO level.
+No in-memory index. No `rstar` crate. The `--disk` flag keeps DuckDB on disk, including the spatial index.
 
 ---
 
 ## Query Flow (Spatial Endpoints)
 
-All spatial queries follow this two-stage pattern. Do not deviate from it:
+All spatial queries are single SQL queries against `raw_data` with spatial predicates:
 
 1. Parse query params into a typed struct
-2. Use R-tree to get a candidate `Vec<i64>` of rowids within the search envelope
-3. Run `SELECT * FROM data WHERE rowid IN (?)` in DuckDB to fetch full rows for candidates only
-4. If radius query: filter candidates by precise geodesic distance using `geo::GeodesicDistance`; inject `_distance_km` field
-5. Apply `where=`, `select=`, `limit=`
-6. Serialize to requested output format
+2. Build a spatial WHERE clause (e.g., `ST_Intersects(geom, ST_MakeEnvelope(...))`)
+3. Run `SELECT * EXCLUDE (geom) FROM raw_data WHERE <spatial_filter> AND <where_clauses> ORDER BY ... LIMIT ...`
+4. For radius/nearest: add `ST_Distance_Sphere(geom, ST_Point(...)) / 1000.0 AS _distance_km` to SELECT, sort by it
+5. Serialize to requested output format
 
-Never full-scan DuckDB for spatial queries. Always prune with the R-tree first.
+DuckDB's R-tree index accelerates `ST_Intersects`, `ST_Contains`, and related predicates automatically.
 
 ---
 
@@ -240,6 +229,7 @@ Options:
   --port <PORT>       HTTP port [default: 8080]
   --bind <ADDR>       Bind address [default: 127.0.0.1]
   --watch             Re-index when source file changes
+  --disk              Use on-disk DuckDB storage (reduces RAM for large files)
   -h, --help          Print help
   -V, --version       Print version
 ```
@@ -343,33 +333,23 @@ Output: `{ "bbox": [minlat, minlon, maxlat, maxlon], "envelope": <GeoJSON Polygo
 
 These apply to every geometry calculation in this codebase:
 
-- **Area** → `geo::GeodesicArea::geodesic_area_unsigned()`. Never planar.
-- **Distance** → `geo::GeodesicDistance::geodesic_distance()`. Never Euclidean.
+- **Area** → `geo::GeodesicArea::geodesic_area_unsigned()`. Never planar. (Karney's algorithm, WGS 84 ellipsoid)
 - **Buffer ring vertices** → `geo::GeodesicDestination::geodesic_destination(origin, bearing, distance_m)`.
 - **Convex hull shape** → computed on 2D lat/lon (acceptable); area of that hull → geodesic.
-- **Haversine is acceptable only** for R-tree envelope expansion. All distance values reported to users must use Vincenty via `geo::GeodesicDistance`.
+- **Query path distances** (radius, nearest) → `ST_Distance_Sphere` (haversine, via DuckDB). Accurate to ~0.3% vs ellipsoidal — sufficient for spatial filtering and `_distance_km` values.
+- **Geometry endpoint distances** (`/geometry/distance`, `/geometry/bounds`) → `geo::GeodesicDistance::geodesic_distance()` (ellipsoidal, high precision).
+- Haversine is acceptable for all query-path distance calculations. Ellipsoidal math is required only for geometry endpoints where precision matters (area, perimeter, explicit distance calculations).
 
 ---
 
 ## DuckDB Ingestion by File Type
 
-```rust
-match extension {
-    "csv"     => conn.execute("CREATE VIEW data AS SELECT * FROM read_csv_auto(?)", [path])?,
-    "parquet" => conn.execute("CREATE VIEW data AS SELECT * FROM read_parquet(?)", [path])?,
-    "geojson" | "json" => {
-        conn.execute("LOAD spatial", [])?;
-        conn.execute("CREATE VIEW data AS SELECT * FROM ST_Read(?)", [path])?;
-    }
-    "duckdb"  => {
-        // Open the file directly, use --table arg to select the table
-        // Wrap in a view called `data` for uniform downstream SQL
-    }
-    _ => return Err(AppError::BadRequest(format!("Unsupported file type: {}", extension)))
-}
-```
+The spatial extension is loaded unconditionally at connection creation (`INSTALL spatial; LOAD spatial;`).
 
-All downstream SQL always queries the `data` view. This keeps the query builder uniform regardless of source.
+File ingestion creates `raw_data` table, then `add_spatial_index()` adds a `geom` GEOMETRY column and R-tree index. The `data` view exposes all columns except `geom`.
+
+- Non-spatial queries use the `data` view.
+- Spatial queries use `raw_data` with `SELECT * EXCLUDE (geom)` to access the R-tree index while hiding the geometry blob.
 
 ---
 
@@ -380,38 +360,6 @@ All downstream SQL always queries the `data` view. This keeps the query builder 
 | `json` | `application/json` | Array of row objects. Default. |
 | `csv` | `text/csv` | Header row + data rows via `csv` crate writer. |
 | `geojson` | `application/geo+json` | FeatureCollection. Each row is a Feature with Point geometry at its lat/lon. All other columns go into `properties`. |
-
----
-
-## Build Phases (implement in order, verify each before proceeding)
-
-### Phase 1 — CLI Skeleton
-`clap` args, `Config` struct, `tracing` setup, startup banner.
-**Gate:** `cargo run -- serve --help` prints usage correctly.
-
-### Phase 2 — DuckDB Integration
-File ingestion, `GET /schema`, `GET /stats`, column auto-detection.
-**Gate:** `curl localhost:8080/schema` returns column list for a test CSV.
-
-### Phase 3 — R-tree Index
-Bulk load from DuckDB scan via rayon, stored in AppState.
-**Gate:** index builds in under 1 second on a 100k-row CSV; build time logged.
-
-### Phase 4 — Core Spatial Queries
-`GET /query` (radius, bbox, nearest), `POST /query/within`.
-**Gate:** radius query returns correct rows verified against known test data; `_distance_km` is present and sorted.
-
-### Phase 5 — Output Formats + Filters
-CSV, GeoJSON output; `select=`, `where=`, `limit=`, `group_by=`, `agg=`.
-**Gate:** `?format=geojson` response validates as GeoJSON; `?format=csv` is well-formed.
-
-### Phase 6 — Geometry Endpoints
-All `POST /geometry/*` routes.
-**Gate:** `/geometry/area` on a 1°×1° box at the equator returns ~12,308 km².
-
-### Phase 7 — Polish
-`GET /health`, `--watch` mode, CORS, request logging middleware.
-**Gate:** `cargo build --release` produces a single binary with no external dependencies.
 
 ---
 
@@ -438,6 +386,9 @@ cargo run -- serve testdata/observations.csv
 
 # With explicit columns and custom port
 cargo run -- serve testdata/observations.csv --lat latitude --lon longitude --port 9000
+
+# Large files — use --disk to keep DuckDB on disk and reduce RAM
+cargo run -- serve huge_dataset.csv --disk
 
 # Release build
 cargo build --release

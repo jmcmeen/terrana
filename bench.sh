@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # Terrana benchmark script
-# Usage: ./bench.sh [10k|100k|1m|250m] [port]
+# Usage: ./bench.sh [10k|100k|1m|250m] [port] [--disk]
 #
 # Starts a terrana server against the specified dataset,
 # runs a suite of timed queries, and prints a summary table.
 
 DATASET="${1:-100k}"
 PORT="${2:-9090}"
+EXTRA_FLAGS="${3:-}"
 FILE="testdata/bench_${DATASET}.csv"
 BASE="http://localhost:${PORT}"
 BINARY="./target/release/terrana"
@@ -30,7 +31,7 @@ fi
 
 # Start server in background
 echo "Starting terrana on port $PORT with $FILE..."
-$BINARY serve "$FILE" --port "$PORT" &
+$BINARY serve "$FILE" --port "$PORT" $EXTRA_FLAGS &
 SERVER_PID=$!
 trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
 
@@ -44,7 +45,7 @@ done
 
 # Grab startup stats
 STATS=$(curl -s "$BASE/stats")
-INDEX_SIZE=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['index_size'])")
+INDEX_SIZE=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['spatial_points'])")
 BUILD_MS=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin)['index_build_ms'])")
 
 echo ""
@@ -76,8 +77,9 @@ run_bench() {
     local elapsed_ms=$(( (end - start) / 1000000 ))
     local count=$(echo "$output" | python3 -c "
 import sys, json
+data = sys.stdin.read()
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(data)
     if isinstance(d, list):
         print(len(d))
     elif 'features' in d:
@@ -89,7 +91,12 @@ try:
     else:
         print('ok')
 except:
-    print('error')
+    # Not JSON — count lines (e.g. CSV: header + data rows)
+    lines = data.strip().split('\n')
+    if len(lines) > 1:
+        print(f'{len(lines)-1} rows')
+    else:
+        print('error')
 " 2>/dev/null)
 
     printf "  %-40s %8s  %8sms\n" "$label" "$count" "$elapsed_ms"

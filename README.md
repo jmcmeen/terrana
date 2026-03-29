@@ -35,6 +35,7 @@ terrana serve <FILE> [OPTIONS]
 | `--port <PORT>` | HTTP port | 8080 |
 | `--bind <ADDR>` | Bind address | 127.0.0.1 |
 | `--watch` | Re-index when source file changes | off |
+| `--disk` | Use on-disk DuckDB storage (reduces RAM for large files) | off |
 
 ### Auto-detection of lat/lon columns
 
@@ -89,9 +90,9 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 ## Tech Stack
 
 - **Rust** with Axum 0.8 for HTTP
-- **DuckDB** (bundled) for file ingestion and SQL queries
-- **rstar** R-tree for spatial indexing
-- **geo** crate for geodesic geometry (Karney/Vincenty on WGS 84)
+- **DuckDB** (bundled) for file ingestion, SQL queries, and spatial R-tree indexing
+- **DuckDB spatial extension** for R-tree index, `ST_Intersects`, `ST_Distance_Sphere`, `ST_Contains`
+- **geo** crate for geodesic geometry (area, buffer, distance endpoints)
 - CORS enabled, request tracing via tower-http
 
 ## Examples
@@ -99,6 +100,9 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 ```bash
 # Start server
 cargo run -- serve testdata/observations.csv
+
+# Large files — use --disk to keep DuckDB on disk and reduce RAM usage
+cargo run -- serve huge_dataset.csv --disk
 
 # Radius search
 curl "localhost:8080/query?lat=36.54&lon=-82.54&radius=5km"
@@ -172,13 +176,13 @@ If you use Terrana in academic research, please cite it as:
 ```bibtex
 @software{terrana,
   title  = {Terrana: Zero-Config Spatial API Server},
-  url    = {https://github.com/your-org/terrana},
-  year   = {2024},
+  url    = {https://github.com/jmcmeen/terrana},
+  year   = {2026},
   note   = {Rust-based spatial query server using DuckDB and R-tree indexing}
 }
 ```
 
-Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
+Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
 
 ## Contributing
 

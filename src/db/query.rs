@@ -6,67 +6,110 @@ use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
-/// Build a `rowid IN (1,2,3)` SQL fragment from an id slice.
-fn rowid_in_clause(ids: &[i64]) -> String {
-    let csv: String = ids
-        .iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("rowid IN ({})", csv)
+// --- Spatial SQL helpers (DuckDB spatial extension) ---
+
+/// WHERE fragment for bounding box using ST_Intersects (R-tree accelerated).
+pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
+    format!(
+        "ST_Intersects(geom, ST_MakeEnvelope({}, {}, {}, {}))",
+        min_lon, min_lat, max_lon, max_lat
+    )
 }
 
-/// Fetch rows by rowid list. Returns all columns as JSON objects.
-pub fn get_rows_by_ids(db: &Mutex<Connection>, ids: &[i64]) -> Result<Vec<Value>, AppError> {
-    if ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let sql = format!(
-        "SELECT * FROM data WHERE {} ORDER BY rowid",
-        rowid_in_clause(ids)
+/// WHERE fragment for radius: bbox envelope + ST_Distance_Sphere.
+pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
+    let deg_offset = radius_m / 111_000.0 * 1.5;
+    let bbox = bbox_filter(
+        lat - deg_offset,
+        lon - deg_offset,
+        lat + deg_offset,
+        lon + deg_offset,
     );
-    execute_query_to_json(db, &sql)
+    format!(
+        "{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
+        bbox, lon, lat, radius_m
+    )
 }
 
-/// Execute a query with optional spatial rowid filter, where/select/group_by/agg/limit.
+/// SELECT expression for distance in km (haversine via ST_Distance_Sphere).
+pub fn distance_select(lat: f64, lon: f64) -> String {
+    format!(
+        "ST_Distance_Sphere(geom, ST_Point({}, {})) / 1000.0 AS _distance_km",
+        lon, lat
+    )
+}
+
+/// WHERE fragment for point-in-polygon using ST_Contains (R-tree accelerated).
+pub fn within_filter_geojson(geojson_str: &str) -> String {
+    format!(
+        "ST_Contains(ST_GeomFromGeoJSON('{}'), geom)",
+        geojson_str.replace('\'', "''")
+    )
+}
+
+// --- Query functions ---
+
+/// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
+/// When `spatial_where` is provided, queries `raw_data` (has geom + R-tree index)
+/// and excludes geom from output. Otherwise queries the `data` view.
+#[allow(clippy::too_many_arguments)]
 pub fn query(
     db: &Mutex<Connection>,
-    ids: Option<&[i64]>,
+    spatial_where: Option<&str>,
     where_clauses: &[(String, String)],
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
     limit: usize,
+    extra_select: Option<&str>,
+    order_by: Option<&str>,
 ) -> Result<Vec<Value>, AppError> {
     // Aggregation path
     if let (Some(gb), Some(a)) = (group_by, agg) {
         db::validate_column_name(gb)?;
-        return query_aggregate(db, ids, where_clauses, gb, a, limit);
+        return query_aggregate(db, spatial_where, where_clauses, gb, a, limit);
     }
 
-    // Select clause
+    let table = if spatial_where.is_some() {
+        "raw_data"
+    } else {
+        "data"
+    };
+
     let select = match select_cols {
         Some(cols) => {
             for c in cols {
                 db::validate_column_name(c)?;
             }
-            cols.join(", ")
+            let mut s = cols.join(", ");
+            if let Some(extra) = extra_select {
+                s.push_str(", ");
+                s.push_str(extra);
+            }
+            s
         }
-        None => "*".to_string(),
+        None => {
+            let base = if spatial_where.is_some() {
+                "* EXCLUDE (geom)"
+            } else {
+                "*"
+            };
+            let mut s = String::from(base);
+            if let Some(extra) = extra_select {
+                s.push_str(", ");
+                s.push_str(extra);
+            }
+            s
+        }
     };
 
-    let mut sql = format!("SELECT {} FROM data", select);
+    let mut sql = format!("SELECT {} FROM {}", select, table);
     let mut conditions = Vec::new();
 
-    // Rowid filter
-    if let Some(ids) = ids {
-        if ids.is_empty() {
-            return Ok(vec![]);
-        }
-        conditions.push(rowid_in_clause(ids));
+    if let Some(sw) = spatial_where {
+        conditions.push(sw.to_string());
     }
 
-    // Where clauses
     for (col, val) in where_clauses {
         db::validate_column_name(col)?;
         conditions.push(format!(
@@ -81,6 +124,11 @@ pub fn query(
         sql.push_str(&conditions.join(" AND "));
     }
 
+    if let Some(ob) = order_by {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(ob);
+    }
+
     sql.push_str(&format!(" LIMIT {}", limit));
 
     execute_query_to_json(db, &sql)
@@ -88,7 +136,7 @@ pub fn query(
 
 fn query_aggregate(
     db: &Mutex<Connection>,
-    ids: Option<&[i64]>,
+    spatial_where: Option<&str>,
     where_clauses: &[(String, String)],
     group_by: &str,
     agg: &str,
@@ -112,15 +160,17 @@ fn query_aggregate(
         "COUNT(*) AS count".to_string()
     };
 
-    let mut sql = format!("SELECT \"{}\", {} FROM data", group_by, agg_expr);
+    let table2 = if spatial_where.is_some() {
+        "raw_data"
+    } else {
+        "data"
+    };
+    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
 
     let mut conditions = Vec::new();
 
-    if let Some(ids) = ids {
-        if ids.is_empty() {
-            return Ok(vec![]);
-        }
-        conditions.push(rowid_in_clause(ids));
+    if let Some(sw) = spatial_where {
+        conditions.push(sw.to_string());
     }
 
     for (col, val) in where_clauses {
@@ -143,8 +193,65 @@ fn query_aggregate(
     execute_query_to_json(db, &sql)
 }
 
+/// Query lat/lon points within a bounding box (uses R-tree via raw_data).
+pub fn query_points_in_bbox(
+    db: &Mutex<Connection>,
+    lat_col: &str,
+    lon_col: &str,
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+) -> Result<Vec<(f64, f64)>, AppError> {
+    db::validate_column_name(lat_col)?;
+    db::validate_column_name(lon_col)?;
+    let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
+    let sql = format!(
+        "SELECT \"{}\", \"{}\" FROM raw_data WHERE {}",
+        lat_col, lon_col, filter
+    );
+    let conn = db::lock_db(db)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL prepare error: {} — {}", e, sql)))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL query error: {} — {}", e, sql)))?;
+    let mut points = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Row fetch error: {}", e)))?
+    {
+        let lat: f64 = row
+            .get(0)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("lat read error: {}", e)))?;
+        let lon: f64 = row
+            .get(1)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("lon read error: {}", e)))?;
+        points.push((lat, lon));
+    }
+    Ok(points)
+}
+
+/// Query full rows within a bounding box (uses R-tree via raw_data).
+pub fn query_rows_in_bbox(
+    db: &Mutex<Connection>,
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    limit: usize,
+) -> Result<Vec<Value>, AppError> {
+    let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
+    let sql = format!(
+        "SELECT * EXCLUDE (geom) FROM raw_data WHERE {} LIMIT {}",
+        filter, limit
+    );
+    execute_query_to_json(db, &sql)
+}
+
 /// Execute a SQL query and return results as Vec<serde_json::Value>.
-fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>, AppError> {
+pub fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>, AppError> {
     let conn = db::lock_db(db)?;
     let mut stmt = conn
         .prepare(sql)
@@ -154,9 +261,6 @@ fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>
         .query([])
         .map_err(|e| AppError::Internal(anyhow::anyhow!("SQL query error: {} — {}", e, sql)))?;
 
-    // Column metadata is available via the Statement backing the Rows.
-    // rows.as_ref() returns Option<&Statement> — None only if the Rows was
-    // created without a statement, which cannot happen via query().
     let stmt_ref = rows
         .as_ref()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No statement backing query results")))?;
@@ -200,14 +304,11 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Ok(v) => json!(v),
             Err(_) => Value::Null,
         },
-        DataType::UInt64 => {
-            // u64 can exceed i64::MAX, so read as u64 and serialize carefully
-            match row.get::<_, u64>(idx) {
-                Ok(v) if v <= i64::MAX as u64 => json!(v),
-                Ok(v) => json!(v.to_string()),
-                Err(_) => Value::Null,
-            }
-        }
+        DataType::UInt64 => match row.get::<_, u64>(idx) {
+            Ok(v) if v <= i64::MAX as u64 => json!(v),
+            Ok(v) => json!(v.to_string()),
+            Err(_) => Value::Null,
+        },
         DataType::Float16
         | DataType::Float32
         | DataType::Float64
@@ -221,82 +322,29 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Ok(v) => json!(v),
             Err(_) => Value::Null,
         },
-        DataType::Date32 => {
-            // Date32 = days since Unix epoch
-            match row.get::<_, i32>(idx) {
-                Ok(days) => {
-                    let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
-                        .map(|d| d.format("%Y-%m-%d").to_string());
-                    match date {
-                        Some(s) => json!(s),
-                        None => json!(days),
-                    }
-                }
-                Err(_) => Value::Null,
-            }
-        }
-        DataType::Date64 | DataType::Timestamp(_, _) => {
-            // Try string representation
-            match row.get::<_, String>(idx) {
-                Ok(v) => json!(v),
-                Err(_) => {
-                    // Fallback: try as i64 (microseconds/milliseconds since epoch)
-                    match row.get::<_, i64>(idx) {
-                        Ok(v) => json!(v),
-                        Err(_) => Value::Null,
-                    }
+        DataType::Date32 => match row.get::<_, i32>(idx) {
+            Ok(days) => {
+                let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                    .map(|d| d.format("%Y-%m-%d").to_string());
+                match date {
+                    Some(s) => json!(s),
+                    None => json!(days),
                 }
             }
-        }
-        _ => {
-            // For Utf8 (VARCHAR) and everything else — get as string
-            match row.get::<_, String>(idx) {
+            Err(_) => Value::Null,
+        },
+        DataType::Date64 | DataType::Timestamp(_, _) => match row.get::<_, String>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => match row.get::<_, i64>(idx) {
                 Ok(v) => json!(v),
                 Err(_) => Value::Null,
-            }
-        }
+            },
+        },
+        _ => match row.get::<_, String>(idx) {
+            Ok(v) => json!(v),
+            Err(_) => Value::Null,
+        },
     }
-}
-
-/// Scan lat/lon columns from DuckDB for R-tree building.
-/// Returns Vec<(rowid, lat, lon)>.
-pub fn scan_lat_lon(
-    db: &Mutex<Connection>,
-    lat_col: &str,
-    lon_col: &str,
-) -> Result<Vec<(i64, f64, f64)>, AppError> {
-    db::validate_column_name(lat_col)?;
-    db::validate_column_name(lon_col)?;
-    let conn = db::lock_db(db)?;
-    let sql = format!(
-        "SELECT rowid, \"{}\", \"{}\" FROM data WHERE \"{}\" IS NOT NULL AND \"{}\" IS NOT NULL",
-        lat_col, lon_col, lat_col, lon_col
-    );
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon prepare: {}", e)))?;
-    let mut rows = stmt
-        .query([])
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon query: {}", e)))?;
-
-    let mut points = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon row: {}", e)))?
-    {
-        let rowid: i64 = row
-            .get(0)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon rowid: {}", e)))?;
-        let lat: f64 = row
-            .get(1)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lat: {}", e)))?;
-        let lon: f64 = row
-            .get(2)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("scan_lat_lon lon: {}", e)))?;
-        points.push((rowid, lat, lon));
-    }
-
-    Ok(points)
 }
 
 fn escape_sql_value(s: &str) -> String {

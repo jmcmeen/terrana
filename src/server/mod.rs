@@ -2,10 +2,8 @@ pub mod middleware;
 
 use crate::config::Config;
 use crate::handlers;
-use crate::index::SpatialPoint;
 use axum::Router;
 use duckdb::Connection;
-use rstar::RTree;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -17,10 +15,11 @@ use tower_http::trace::TraceLayer;
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Arc<Mutex<Connection>>,
-    pub index: Arc<RTree<SpatialPoint>>,
     pub schema: Arc<TableSchema>,
     pub start_time: Instant,
     pub index_build_ms: u128,
+    pub spatial_bbox: Option<(f64, f64, f64, f64)>,
+    pub spatial_count: i64,
 }
 
 #[derive(Debug, Serialize)]
