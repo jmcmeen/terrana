@@ -178,7 +178,7 @@ If you use Terrana in academic research, please cite it as:
 }
 ```
 
-Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/your-org/terrana>*
+Or in prose: *Terrana (2024). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
 
 ## Contributing
 
@@ -193,7 +193,7 @@ Contributions are welcome. Here are some ways to get involved:
 ### Getting started
 
 ```bash
-git clone https://github.com/your-org/terrana.git
+git clone https://github.com/jmcmeen/terrana.git
 cd terrana
 cargo build
 cargo run -- serve testdata/observations.csv
