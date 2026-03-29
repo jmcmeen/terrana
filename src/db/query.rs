@@ -265,6 +265,8 @@ pub fn scan_lat_lon(
     lat_col: &str,
     lon_col: &str,
 ) -> Result<Vec<(i64, f64, f64)>, AppError> {
+    db::validate_column_name(lat_col)?;
+    db::validate_column_name(lon_col)?;
     let conn = db::lock_db(db)?;
     let sql = format!(
         "SELECT rowid, \"{}\", \"{}\" FROM data WHERE \"{}\" IS NOT NULL AND \"{}\" IS NOT NULL",
