@@ -182,7 +182,7 @@ If you use Terrana in academic research, please cite it as:
 }
 ```
 
-Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/your-org/terrana>*
+Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
 
 ## Contributing
 
@@ -205,7 +205,3 @@ cargo run -- serve testdata/observations.csv
 ```
 
 Please run `cargo fmt` and `cargo clippy` before submitting a PR.
-
-## License
-
-MIT
