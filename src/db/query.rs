@@ -50,23 +50,6 @@ pub fn within_filter_geojson(geojson_str: &str) -> String {
 
 // --- Query functions ---
 
-/// Fetch rows by rowid list. Returns all columns as JSON objects.
-pub fn get_rows_by_ids(db: &Mutex<Connection>, ids: &[i64]) -> Result<Vec<Value>, AppError> {
-    if ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let csv: String = ids
-        .iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "SELECT * FROM data WHERE rowid IN ({}) ORDER BY rowid",
-        csv
-    );
-    execute_query_to_json(db, &sql)
-}
-
 /// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
 /// When `spatial_where` is provided, queries `raw_data` (which has the geom column + R-tree index)
 /// and excludes the geom column from output. Otherwise queries the `data` view.
