@@ -77,8 +77,9 @@ run_bench() {
     local elapsed_ms=$(( (end - start) / 1000000 ))
     local count=$(echo "$output" | python3 -c "
 import sys, json
+data = sys.stdin.read()
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(data)
     if isinstance(d, list):
         print(len(d))
     elif 'features' in d:
@@ -90,7 +91,12 @@ try:
     else:
         print('ok')
 except:
-    print('error')
+    # Not JSON — count lines (e.g. CSV: header + data rows)
+    lines = data.strip().split('\n')
+    if len(lines) > 1:
+        print(f'{len(lines)-1} rows')
+    else:
+        print('error')
 " 2>/dev/null)
 
     printf "  %-40s %8s  %8sms\n" "$label" "$count" "$elapsed_ms"
