@@ -32,6 +32,7 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
         }
         "geojson" | "json" => {
+            crate::db::ensure_spatial(conn)?;
             conn.execute_batch(&format!(
                 "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
@@ -151,6 +152,9 @@ pub fn add_spatial_index(
     lon_col: &str,
 ) -> Result<(), AppError> {
     info!(lat = %lat_col, lon = %lon_col, "building spatial index");
+
+    // Load spatial extension (deferred until after CSV ingestion to avoid crashes)
+    crate::db::ensure_spatial(conn)?;
 
     // Create a new table with geometry column via SELECT (avoids ALTER TABLE + UPDATE bug)
     conn.execute_batch(&format!(
