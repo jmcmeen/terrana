@@ -1,0 +1,63 @@
+name: Bug report
+description: Report something that isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please fill in as much as you can — a minimal sample
+        file and the exact query that triggered the issue help a lot.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead.
+      placeholder: "Running `terrana serve data.csv` then GET /query?... returns ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The command you ran, the request you made, and (if possible) a small sample file.
+      placeholder: |
+        1. terrana serve sample.csv --lat lat --lon lon
+        2. curl "localhost:8080/query?bbox=..."
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: file-format
+    attributes:
+      label: Source file format
+      options:
+        - CSV
+        - Parquet
+        - GeoJSON
+        - DuckDB
+        - Other / N/A
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Terrana version
+      description: Output of `terrana --version` (or the commit hash).
+      placeholder: "terrana 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS / platform
+      placeholder: "Ubuntu 24.04 / macOS 14 (arm64)"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output with `RUST_LOG=terrana=debug`, if available. This is rendered as code, so no backticks needed.
+      render: shell
+    validations:
+      required: false
