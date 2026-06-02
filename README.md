@@ -179,19 +179,21 @@ Generate test datasets — simulated iNaturalist-style wildlife observations acr
 
 ```bash
 # Standard sizes (10K / 100K / 1M)
-python3 testdata/generate_benchdata.py
+python3 testdata/generate.py --preset bench
 
 # iNaturalist scale (250M rows, ~15 GB)
-python3 testdata/generate_250m.py
+python3 testdata/generate.py --preset 250m
 ```
 
 Run the benchmark suite:
 
 ```bash
-./bench.sh 1m          # 1M rows on default port 9090
-./bench.sh 250m 8080   # 250M rows on port 8080
-./bench.sh 100k        # 100K rows, quick smoke test
+./testdata/bench.sh 1m          # 1M rows on default port 9090
+./testdata/bench.sh 250m 8080   # 250M rows on port 8080
+./testdata/bench.sh 100k        # 100K rows, quick smoke test
 ```
+
+Or via `make`: `make gen` to build the datasets and `make bench DATASET=1m` to run the suite.
 
 Results on 1M rows (release build, single core):
 

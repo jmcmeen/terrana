@@ -14,7 +14,7 @@ documentation, new file formats, geometry operations, and performance work.
   [`src/handlers/geometry.rs`](src/handlers/geometry.rs). All spatial math **must**
   use geodesic algorithms from the `geo` crate — never planar/Cartesian (see
   [Geodesic rules](#geodesic-rules) below).
-- **Performance** — Benchmark with `./bench.sh`, profile with `cargo flamegraph`,
+- **Performance** — Benchmark with `./testdata/bench.sh` (or `make bench`), profile with `cargo flamegraph`,
   and open a PR with before/after numbers.
 - **Documentation** — Improvements to the README, examples, or inline doc comments
   are always appreciated.

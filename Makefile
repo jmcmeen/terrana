@@ -6,12 +6,13 @@
 FILE ?= testdata/observations.csv
 PORT ?= 8080
 ARGS ?=
+DATASET ?= 100k
 
 .DEFAULT_GOAL := help
 
 .PHONY: help
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
@@ -25,6 +26,18 @@ release: ## Build optimized release binary
 .PHONY: run
 run: ## Run the server against $(FILE) on $(PORT) (e.g. make run FILE=data.csv)
 	cargo run -- serve $(FILE) --port $(PORT) $(ARGS)
+
+.PHONY: gen
+gen: ## Generate standard benchmark datasets (10k/100k/1m) into testdata/
+	python3 testdata/generate.py --preset bench
+
+.PHONY: gen-250m
+gen-250m: ## Generate the 250M-row benchmark dataset (~15 GB) into testdata/
+	python3 testdata/generate.py --preset 250m
+
+.PHONY: bench
+bench: ## Run the benchmark suite (e.g. make bench DATASET=1m)
+	./testdata/bench.sh $(DATASET)
 
 .PHONY: test
 test: ## Run fast unit tests (offline)

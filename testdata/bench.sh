@@ -2,10 +2,15 @@
 set -euo pipefail
 
 # Terrana benchmark script
-# Usage: ./bench.sh [10k|100k|1m|250m] [port] [--disk]
+# Usage: ./testdata/bench.sh [10k|100k|1m|250m] [port] [--disk]
 #
 # Starts a terrana server against the specified dataset,
 # runs a suite of timed queries, and prints a summary table.
+# Runnable from any directory — paths resolve relative to the repo root.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 DATASET="${1:-100k}"
 PORT="${2:-9090}"
@@ -17,9 +22,9 @@ BINARY="./target/release/terrana"
 if [[ ! -f "$FILE" ]]; then
     echo "Dataset not found: $FILE"
     if [[ "$DATASET" == "250m" ]]; then
-        echo "Run: python3 testdata/generate_250m.py"
+        echo "Run: python3 testdata/generate.py --preset 250m"
     else
-        echo "Run: python3 testdata/generate_benchdata.py"
+        echo "Run: python3 testdata/generate.py --preset bench"
     fi
     exit 1
 fi
