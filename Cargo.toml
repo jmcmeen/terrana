@@ -14,14 +14,14 @@ keywords = ["spatial", "gis", "geospatial", "duckdb", "rest-api"]
 categories = ["command-line-utilities", "science::geo", "web-programming::http-server"]
 exclude = [
     "testdata/bench_*",
-    "bench.sh",
+    "testdata/bench.sh",
     "Makefile",
     "Dockerfile",
     "docker-compose.yml",
     ".dockerignore",
     "CLAUDE.md",
     ".github/",
-    "testdata/generate_*.py",
+    "testdata/*.py",
 ]
 
 [[bin]]
@@ -52,3 +52,4 @@ tempfile = "3"
 [dev-dependencies]
 ureq = { version = "3", features = ["json"] }
 serde_json = "1"
+tempfile = "3"
