@@ -3,5 +3,4 @@
 # reproducible builds. (Library crates typically gitignore it instead.)
 testdata/bench_*.csv
 testdata/bench_*.csv.gz
-BACKLOG.md
 /.claude
