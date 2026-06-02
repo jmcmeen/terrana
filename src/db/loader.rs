@@ -9,12 +9,17 @@ use tracing::info;
 
 /// Drop any dataset artifacts left from a previous load. A no-op on first load;
 /// used by `--watch` so a file change can re-ingest into a clean slate.
+///
+/// `DETACH DATABASE IF EXISTS source` releases the alias used by the `.duckdb`
+/// ingestion path; without it a re-ingest would fail with "database with name
+/// source already exists" when `load_file` tries to re-`ATTACH`.
 pub fn drop_dataset(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
         "DROP VIEW IF EXISTS data; \
          DROP INDEX IF EXISTS spatial_idx; \
          DROP TABLE IF EXISTS raw_data; \
-         DROP TABLE IF EXISTS spatial_data;",
+         DROP TABLE IF EXISTS spatial_data; \
+         DETACH DATABASE IF EXISTS source;",
     )
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Dataset reset error: {}", e)))?;
     Ok(())
