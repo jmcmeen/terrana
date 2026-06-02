@@ -38,7 +38,17 @@ fi
 echo "Starting terrana on port $PORT with $FILE..."
 $BINARY serve "$FILE" --port "$PORT" $EXTRA_FLAGS &
 SERVER_PID=$!
-trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
+
+# Kill the server on exit, but preserve the script's real exit status. Without the
+# saved `rc`, the trap's `wait` would return 143 (128 + SIGTERM) and make a successful
+# benchmark look like a failure (`make bench` -> Error 143).
+cleanup() {
+    local rc=$?
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    exit "$rc"
+}
+trap cleanup EXIT
 
 # Wait for server to be ready
 for i in $(seq 1 30); do
