@@ -2,6 +2,27 @@
 name = "terrana"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.82"
+authors = ["John McMeen <johnmcmeen@gmail.com>"]
+description = "Zero-config spatial API server — point it at a CSV, Parquet, or GeoJSON file and get a REST API with spatial and geometry queries."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jmcmeen/terrana"
+homepage = "https://github.com/jmcmeen/terrana"
+documentation = "https://docs.rs/terrana"
+readme = "README.md"
+keywords = ["spatial", "gis", "geospatial", "duckdb", "rest-api"]
+categories = ["command-line-utilities", "science::geo", "web-programming::http-server"]
+exclude = [
+    "testdata/bench_*",
+    "bench.sh",
+    "Makefile",
+    "Dockerfile",
+    "docker-compose.yml",
+    ".dockerignore",
+    "CLAUDE.md",
+    ".github/",
+    "testdata/generate_*.py",
+]
 
 [[bin]]
 name = "terrana"
@@ -14,7 +35,7 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 duckdb = { version = "1", features = ["bundled"] }
-geo = "0.29"
+geo = "0.33"
 geo-types = "0.7"
 geojson = { version = "1", features = ["geo-types"] }
 serde = { version = "1", features = ["derive"] }
@@ -27,3 +48,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify = "8"
 tempfile = "3"
+
+[dev-dependencies]
+ureq = { version = "3", features = ["json"] }
+serde_json = "1"

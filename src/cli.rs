@@ -1,3 +1,5 @@
+//! Command-line interface: the `terrana` binary and its `serve` subcommand.
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 

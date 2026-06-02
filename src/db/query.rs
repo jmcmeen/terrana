@@ -1,3 +1,7 @@
+//! SQL query builders and spatial filter helpers. User-supplied column names are
+//! validated via [`db::validate_column_name`] and string values are escaped before
+//! interpolation into SQL.
+
 use crate::db;
 use crate::error::AppError;
 use chrono::NaiveDate;
@@ -5,6 +9,11 @@ use duckdb::arrow::datatypes::DataType;
 use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
+
+/// Default row limit when the client does not specify `limit`.
+pub const DEFAULT_LIMIT: usize = 1000;
+/// Hard cap on the number of rows any query may return.
+pub const MAX_RESULT_LIMIT: usize = 100_000;
 
 // --- Spatial SQL helpers (DuckDB spatial extension) ---
 
@@ -349,4 +358,38 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
 
 fn escape_sql_value(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_doubles_single_quotes() {
+        assert_eq!(escape_sql_value("o'brien"), "o''brien");
+        assert_eq!(escape_sql_value("'; DROP --"), "''; DROP --");
+        assert_eq!(escape_sql_value("plain"), "plain");
+    }
+
+    #[test]
+    fn bbox_filter_uses_lon_lat_order() {
+        // ST_MakeEnvelope takes (min_lon, min_lat, max_lon, max_lat).
+        let f = bbox_filter(35.0, -84.0, 37.0, -81.0);
+        assert!(f.contains("ST_MakeEnvelope(-84, 35, -81, 37)"));
+        assert!(f.starts_with("ST_Intersects(geom,"));
+    }
+
+    #[test]
+    fn distance_select_aliases_km() {
+        let s = distance_select(36.5, -82.5);
+        assert!(s.contains("ST_Distance_Sphere(geom, ST_Point(-82.5, 36.5))"));
+        assert!(s.ends_with("AS _distance_km"));
+    }
+
+    #[test]
+    fn within_filter_escapes_geojson() {
+        let f = within_filter_geojson("{\"x\":\"o'brien\"}");
+        assert!(f.contains("o''brien"));
+        assert!(f.starts_with("ST_Contains(ST_GeomFromGeoJSON("));
+    }
 }

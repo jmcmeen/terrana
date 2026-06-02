@@ -1,4 +1,8 @@
+//! `POST /query/within` — point-in-polygon queries from a GeoJSON body, using
+//! DuckDB's R-tree-accelerated `ST_Contains`.
+
 use crate::db;
+use crate::db::query::MAX_RESULT_LIMIT;
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
@@ -7,6 +11,7 @@ use axum::response::Response;
 use axum::Json;
 use geojson::GeoJson;
 
+/// Return all rows whose point falls inside the supplied GeoJSON polygon(s).
 pub async fn within(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
@@ -22,7 +27,7 @@ pub async fn within(
         None,
         None,
         None,
-        100_000,
+        MAX_RESULT_LIMIT,
         None,
         None,
     )?;

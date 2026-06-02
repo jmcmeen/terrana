@@ -1,3 +1,6 @@
+//! The application error type. Every handler returns `Result<_, AppError>`, and
+//! `AppError` maps to an HTTP status + JSON body via its `IntoResponse` impl.
+
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
@@ -9,7 +12,6 @@ pub enum AppError {
     #[error("Column not found: {0}")]
     ColumnNotFound(String),
     #[error("File not found: {0}")]
-    #[allow(dead_code)]
     FileNotFound(String),
     #[error("Geometry error: {0}")]
     Geometry(String),

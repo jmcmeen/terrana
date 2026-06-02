@@ -1,11 +1,37 @@
+//! File ingestion (CSV / Parquet / GeoJSON / DuckDB), lat/lon auto-detection, and
+//! spatial-index construction. All user-supplied identifiers are validated or quoted
+//! before being interpolated into SQL.
+
 use crate::error::AppError;
 use duckdb::Connection;
 use std::path::Path;
 use tracing::info;
 
+/// Drop any dataset artifacts left from a previous load. A no-op on first load;
+/// used by `--watch` so a file change can re-ingest into a clean slate.
+///
+/// `DETACH DATABASE IF EXISTS source` releases the alias used by the `.duckdb`
+/// ingestion path; without it a re-ingest would fail with "database with name
+/// source already exists" when `load_file` tries to re-`ATTACH`.
+pub fn drop_dataset(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "DROP VIEW IF EXISTS data; \
+         DROP INDEX IF EXISTS spatial_idx; \
+         DROP TABLE IF EXISTS raw_data; \
+         DROP TABLE IF EXISTS spatial_data; \
+         DETACH DATABASE IF EXISTS source;",
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Dataset reset error: {}", e)))?;
+    Ok(())
+}
+
 /// Ingest a file into DuckDB as a view named `data`.
 /// Adds a `rowid` column via ROW_NUMBER() for spatial index cross-referencing.
 pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
+    if !path.exists() {
+        return Err(AppError::FileNotFound(path.display().to_string()));
+    }
+
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -48,6 +74,9 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
                     "For .duckdb files, specify --table <TABLE> to select the table".into(),
                 )
             })?;
+            // Validate the table identifier before interpolating it into SQL, then
+            // quote it as a DuckDB identifier. Prevents injection via --table.
+            crate::db::validate_column_name(tbl)?;
             // Attach the file and create a view
             conn.execute_batch(&format!(
                 "ATTACH '{}' AS source (READ_ONLY);",
@@ -55,7 +84,7 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB attach error: {}", e)))?;
             conn.execute_batch(&format!(
-                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM source.{}",
+                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM source.\"{}\"",
                 tbl
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB table read error: {}", e)))?;
@@ -211,4 +240,50 @@ pub fn add_spatial_index(
 
 fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cols(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn detects_common_names_case_insensitively() {
+        let (lat, lon) =
+            detect_lat_lon(&cols(&["id", "Latitude", "Longitude"]), None, None).unwrap();
+        assert_eq!(lat, "Latitude");
+        assert_eq!(lon, "Longitude");
+
+        let (lat, lon) = detect_lat_lon(&cols(&["x", "y", "name"]), None, None).unwrap();
+        assert_eq!(lat, "y");
+        assert_eq!(lon, "x");
+    }
+
+    #[test]
+    fn honors_priority_order() {
+        // `latitude`/`longitude` outrank `lat`/`lon` when both are present.
+        let (lat, lon) =
+            detect_lat_lon(&cols(&["lat", "latitude", "lon", "longitude"]), None, None).unwrap();
+        assert_eq!(lat, "latitude");
+        assert_eq!(lon, "longitude");
+    }
+
+    #[test]
+    fn overrides_must_exist() {
+        assert!(detect_lat_lon(&cols(&["a", "b"]), Some("a"), Some("b")).is_ok());
+        assert!(detect_lat_lon(&cols(&["a", "b"]), Some("missing"), Some("b")).is_err());
+    }
+
+    #[test]
+    fn detection_fails_without_candidates() {
+        assert!(detect_lat_lon(&cols(&["foo", "bar"]), None, None).is_err());
+    }
+
+    #[test]
+    fn escape_doubles_single_quotes() {
+        assert_eq!(escape_sql_string("a'b"), "a''b");
+    }
 }

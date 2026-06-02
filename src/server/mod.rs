@@ -1,3 +1,5 @@
+//! Axum router assembly and the shared [`AppState`] passed to every handler.
+
 pub mod middleware;
 
 use crate::config::Config;
@@ -5,20 +7,43 @@ use crate::handlers;
 use axum::Router;
 use duckdb::Connection;
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+/// State shared across all handlers. Cloning is cheap — every expensive field is
+/// behind an `Arc`. The mutable, refreshable parts (schema + spatial stats) live in
+/// [`Snapshot`] behind an `RwLock` so `--watch` can swap them atomically on reload.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct AppState {
+    /// Resolved CLI configuration. Retained for introspection / future handlers.
+    #[allow(dead_code)]
     pub config: Arc<Config>,
     pub db: Arc<Mutex<Connection>>,
-    pub schema: Arc<TableSchema>,
+    pub snapshot: Arc<RwLock<Arc<Snapshot>>>,
     pub start_time: Instant,
+}
+
+impl AppState {
+    /// Take a cheap, lock-free-after-clone view of the current dataset snapshot.
+    /// Recovers from a poisoned lock so a panicking reload can never wedge reads.
+    pub fn snapshot(&self) -> Arc<Snapshot> {
+        self.snapshot
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+/// A geographic bounding box: `(min_lat, min_lon, max_lat, max_lon)`.
+pub type BBox = (f64, f64, f64, f64);
+
+/// An immutable view of the loaded dataset. Swapped wholesale on `--watch` reload.
+pub struct Snapshot {
+    pub schema: TableSchema,
     pub index_build_ms: u128,
-    pub spatial_bbox: Option<(f64, f64, f64, f64)>,
+    pub spatial_bbox: Option<BBox>,
     pub spatial_count: i64,
 }
 

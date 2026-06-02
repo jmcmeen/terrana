@@ -1,3 +1,6 @@
+//! DuckDB connection management, the spatial extension, schema discovery, and the
+//! column-name validator shared by all query builders.
+
 pub mod loader;
 pub mod query;
 
@@ -44,10 +47,8 @@ pub struct TableInfo {
     pub row_count: i64,
 }
 
-/// Discover schema of the `data` view.
-pub fn get_table_info(db: &Mutex<Connection>) -> Result<TableInfo, AppError> {
-    let conn = lock_db(db)?;
-
+/// Discover schema of the `data` view on a connection.
+pub fn get_table_info_conn(conn: &Connection) -> Result<TableInfo, AppError> {
     let mut col_names = Vec::new();
     let mut col_types = Vec::new();
 
@@ -96,4 +97,26 @@ pub fn validate_column_name(name: &str) -> Result<&str, AppError> {
         )));
     }
     Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_plain_identifiers() {
+        assert!(validate_column_name("species").is_ok());
+        assert!(validate_column_name("quality_grade").is_ok());
+        assert!(validate_column_name("col1").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_and_injection_attempts() {
+        assert!(validate_column_name("").is_err());
+        assert!(validate_column_name("a; DROP TABLE raw_data").is_err());
+        assert!(validate_column_name("a b").is_err());
+        assert!(validate_column_name("a\"b").is_err());
+        assert!(validate_column_name("a'b").is_err());
+        assert!(validate_column_name("a-b").is_err());
+    }
 }
