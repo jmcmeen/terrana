@@ -37,7 +37,8 @@ extension from the network and caches it locally.)
 
 ## Install
 
-Once published to [crates.io](https://crates.io/crates/terrana):
+Terrana is published on [crates.io](https://crates.io/crates/terrana). Install the
+`terrana` binary with:
 
 ```bash
 cargo install terrana
