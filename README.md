@@ -212,14 +212,16 @@ If you use Terrana in academic research, please cite it as:
 
 ```bibtex
 @software{terrana,
-  title  = {Terrana: Zero-Config Spatial API Server},
-  url    = {https://github.com/jmcmeen/terrana},
-  year   = {2026},
-  note   = {Rust-based spatial query server using DuckDB and R-tree indexing}
+  title     = {Terrana: Zero-Config Spatial API Server},
+  url       = {https://github.com/jmcmeen/terrana},
+  doi       = {10.5281/zenodo.20515989},
+  year      = {2026},
+  publisher = {Zenodo},
+  note      = {Rust-based spatial query server using DuckDB and R-tree indexing}
 }
 ```
 
-Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
+Or in prose: *Terrana (2026). Zero-config spatial API server. <https://doi.org/10.5281/zenodo.20515989>*
 
 ## Testing
 
