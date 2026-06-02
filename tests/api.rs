@@ -54,9 +54,14 @@ fn free_port() -> u16 {
 
 /// Spawn `terrana serve testdata/observations.csv` and wait for `/health` to answer.
 fn spawn(extra_args: &[&str]) -> TestServer {
+    spawn_file("testdata/observations.csv", extra_args)
+}
+
+/// Spawn `terrana serve <file>` and wait for `/health` to answer.
+fn spawn_file(file: &str, extra_args: &[&str]) -> TestServer {
     let port = free_port();
     let port_str = port.to_string();
-    let mut args = vec!["serve", "testdata/observations.csv", "--port", &port_str];
+    let mut args = vec!["serve", file, "--port", &port_str];
     args.extend_from_slice(extra_args);
 
     let child = Command::new(env!("CARGO_BIN_EXE_terrana"))
@@ -79,6 +84,21 @@ fn spawn(extra_args: &[&str]) -> TestServer {
             }
         }
         std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Poll `/schema`'s `row_count` until it equals `want` or `timeout` elapses.
+/// Returns the last value observed (for assertion messages).
+fn wait_for_row_count(server: &TestServer, want: i64, timeout: Duration) -> i64 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let last = get_json(server, "/schema")["row_count"]
+            .as_i64()
+            .unwrap_or(-1);
+        if last == want || Instant::now() >= deadline {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -265,4 +285,58 @@ fn invalid_select_column_is_rejected() {
         ureq::Error::StatusCode(code) => assert_eq!(code, 400),
         other => panic!("expected HTTP status error, got {other}"),
     }
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn watch_reload_reflects_new_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(&path, "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n").unwrap();
+
+    let s = spawn_file(path.to_str().unwrap(), &["--watch"]);
+    assert_eq!(get_json(&s, "/schema")["row_count"], 2);
+
+    // Rewrite the file with two more rows; --watch should re-ingest it.
+    std::fs::write(
+        &path,
+        "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n4,36.8,-82.2\n",
+    )
+    .unwrap();
+
+    let got = wait_for_row_count(&s, 4, Duration::from_secs(30));
+    assert_eq!(got, 4, "watch should re-ingest the new rows");
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn watch_reload_keeps_old_data_on_bad_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(&path, "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n").unwrap();
+
+    let s = spawn_file(path.to_str().unwrap(), &["--watch"]);
+    assert_eq!(get_json(&s, "/schema")["row_count"], 2);
+
+    // Overwrite with a file that loads fine but has no lat/lon columns — a deterministic
+    // detection failure mid-reload. The atomic reload must keep serving the old data.
+    std::fs::write(&path, "a,b,c\n1,2,3\n").unwrap();
+
+    // Give the watcher time to fire and (fail to) reload, then assert nothing changed.
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        get_json(&s, "/schema")["row_count"],
+        2,
+        "old data must survive a failed reload"
+    );
+    assert_eq!(get_json(&s, "/health")["status"], "ok");
+
+    // A subsequent good file must still reload — the watcher recovered from the failure.
+    std::fs::write(
+        &path,
+        "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n",
+    )
+    .unwrap();
+    let got = wait_for_row_count(&s, 3, Duration::from_secs(30));
+    assert_eq!(got, 3, "watcher should recover and reload a good file");
 }

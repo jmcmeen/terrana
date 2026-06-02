@@ -7,12 +7,12 @@ use duckdb::Connection;
 use std::path::Path;
 use tracing::info;
 
-/// Drop any dataset artifacts left from a previous load. A no-op on first load;
-/// used by `--watch` so a file change can re-ingest into a clean slate.
+/// Drop the live dataset artifacts. A no-op on first load; called by
+/// [`promote_stage`] to clear the previous dataset before swapping in the new one.
 ///
-/// `DETACH DATABASE IF EXISTS source` releases the alias used by the `.duckdb`
-/// ingestion path; without it a re-ingest would fail with "database with name
-/// source already exists" when `load_file` tries to re-`ATTACH`.
+/// `DETACH DATABASE IF EXISTS source` is a defensive cleanup of the legacy `.duckdb`
+/// attach alias; current ingestion attaches under `source_stage` and detaches it in
+/// [`stage_file`], so this is normally a no-op.
 pub fn drop_dataset(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
         "DROP VIEW IF EXISTS data; \
@@ -25,13 +25,29 @@ pub fn drop_dataset(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Ingest a file into DuckDB as a view named `data`.
-/// Adds a `rowid` column via ROW_NUMBER() for spatial index cross-referencing.
-pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
+/// Stage a file into DuckDB as the table `raw_data_stage` (no `data` view yet).
+///
+/// This is the *risky* half of a (re)load — it reads and parses the external file.
+/// Keeping it separate from [`promote_stage`] is what makes `--watch` reloads
+/// failure-atomic: if a reload hits a malformed or half-written file, it fails here
+/// and the live dataset is left untouched. Adds a `rowid` column via ROW_NUMBER()
+/// for spatial-index cross-referencing.
+pub fn stage_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
     if !path.exists() {
         return Err(AppError::FileNotFound(path.display().to_string()));
     }
+    // Clear any leftovers from a previously-aborted stage before starting fresh.
+    discard_stage(conn)?;
 
+    // Best-effort cleanup on failure so a bad stage can't block the next reload.
+    if let Err(e) = stage_file_inner(conn, path, table) {
+        let _ = discard_stage(conn);
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn stage_file_inner(conn: &Connection, path: &Path, table: Option<&str>) -> Result<(), AppError> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -40,19 +56,19 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
 
     let path_str = path.to_string_lossy();
 
-    info!(ext = %extension, "loading file via DuckDB");
+    info!(ext = %extension, "staging file via DuckDB");
 
     match extension.as_str() {
         "csv" => {
             conn.execute_batch(&format!(
-                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_csv_auto('{}')",
+                "CREATE TABLE raw_data_stage AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_csv_auto('{}')",
                 escape_sql_string(&path_str)
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("CSV ingestion error: {}", e)))?;
         }
         "parquet" => {
             conn.execute_batch(&format!(
-                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_parquet('{}')",
+                "CREATE TABLE raw_data_stage AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM read_parquet('{}')",
                 escape_sql_string(&path_str)
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
@@ -63,7 +79,7 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
                     AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e))
                 })?;
             conn.execute_batch(&format!(
-                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
+                "CREATE TABLE raw_data_stage AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("GeoJSON ingestion error: {}", e)))?;
@@ -77,17 +93,20 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
             // Validate the table identifier before interpolating it into SQL, then
             // quote it as a DuckDB identifier. Prevents injection via --table.
             crate::db::validate_column_name(tbl)?;
-            // Attach the file and create a view
+            // Attach under a dedicated scratch alias so the live dataset is untouched,
+            // copy the table into staging, then detach — the staging copy is self-contained.
             conn.execute_batch(&format!(
-                "ATTACH '{}' AS source (READ_ONLY);",
+                "ATTACH '{}' AS source_stage (READ_ONLY);",
                 escape_sql_string(&path_str)
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB attach error: {}", e)))?;
             conn.execute_batch(&format!(
-                "CREATE TABLE raw_data AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM source.\"{}\"",
+                "CREATE TABLE raw_data_stage AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM source_stage.\"{}\"",
                 tbl
             ))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB table read error: {}", e)))?;
+            conn.execute_batch("DETACH DATABASE source_stage;")
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("DuckDB detach error: {}", e)))?;
         }
         _ => {
             return Err(AppError::BadRequest(format!(
@@ -97,16 +116,36 @@ pub fn load_file(conn: &Connection, path: &Path, table: Option<&str>) -> Result<
         }
     }
 
-    // Create the canonical `data` view that all downstream SQL uses
-    conn.execute_batch("CREATE VIEW data AS SELECT * FROM raw_data")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("View creation error: {}", e)))?;
-
     let row_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM raw_data_stage", [], |row| row.get(0))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("COUNT error: {}", e)))?;
 
-    info!(rows = row_count, "file loaded into DuckDB");
+    info!(rows = row_count, "file staged into DuckDB");
 
+    Ok(())
+}
+
+/// Promote the staged dataset to live: drop the previous dataset, rename
+/// `raw_data_stage` → `raw_data`, and (re)create the canonical `data` view that all
+/// downstream SQL uses. Call only after [`stage_file`] has succeeded.
+pub fn promote_stage(conn: &Connection) -> Result<(), AppError> {
+    drop_dataset(conn)?;
+    conn.execute_batch(
+        "ALTER TABLE raw_data_stage RENAME TO raw_data; \
+         CREATE VIEW data AS SELECT * FROM raw_data;",
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Promote staging error: {}", e)))?;
+    Ok(())
+}
+
+/// Drop a staged-but-not-promoted dataset (and detach its scratch alias). Used to
+/// clean up when a reload aborts before promotion, so the next reload starts clean.
+pub fn discard_stage(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS raw_data_stage; \
+         DETACH DATABASE IF EXISTS source_stage;",
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Discard staging error: {}", e)))?;
     Ok(())
 }
 
