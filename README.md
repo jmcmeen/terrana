@@ -3,7 +3,7 @@
 [![CI](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml/badge.svg)](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/terrana.svg)](https://crates.io/crates/terrana)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![DOI](https://zenodo.org/badge/1186826741.svg)](https://doi.org/10.5281/zenodo.20515989)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20516378.svg)](https://doi.org/10.5281/zenodo.20516378)
 
 Zero-config spatial API server. Point it at a CSV, Parquet, or GeoJSON file containing lat/lon columns and immediately get a REST API with spatial queries and geometry operations — no database setup, no PostGIS, no infrastructure.
 
@@ -214,14 +214,14 @@ If you use Terrana in academic research, please cite it as:
 @software{terrana,
   title     = {Terrana: Zero-Config Spatial API Server},
   url       = {https://github.com/jmcmeen/terrana},
-  doi       = {10.5281/zenodo.20515989},
+  doi       = {10.5281/zenodo.20516378},
   year      = {2026},
   publisher = {Zenodo},
   note      = {Rust-based spatial query server using DuckDB and R-tree indexing}
 }
 ```
 
-Or in prose: *Terrana (2026). Zero-config spatial API server. <https://doi.org/10.5281/zenodo.20515989>*
+Or in prose: *Terrana (2026). Zero-config spatial API server. <https://doi.org/10.5281/zenodo.20516378>*
 
 ## Testing
 
