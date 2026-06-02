@@ -130,15 +130,23 @@ terrana/
 
 The axum router shares this state across all handlers. Clone it freely — the expensive parts are behind `Arc`.
 
+The mutable, refreshable parts (schema + spatial stats) live in a `Snapshot` behind an
+`RwLock`, so `--watch` can re-ingest the file and swap the whole snapshot atomically.
+Handlers read it via `state.snapshot()`, which returns a cheap `Arc<Snapshot>` clone.
+
 ```rust
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub db: Arc<Mutex<duckdb::Connection>>,  // DuckDB Connection is not Send
-    pub schema: Arc<TableSchema>,
+    pub db: Arc<Mutex<duckdb::Connection>>,  // DuckDB Connection is Send but not Sync
+    pub snapshot: Arc<RwLock<Arc<Snapshot>>>,
     pub start_time: Instant,
+}
+
+pub struct Snapshot {
+    pub schema: TableSchema,
     pub index_build_ms: u128,
-    pub spatial_bbox: Option<(f64, f64, f64, f64)>,  // cached at startup
+    pub spatial_bbox: Option<(f64, f64, f64, f64)>,  // None when no valid coords
     pub spatial_count: i64,
 }
 
