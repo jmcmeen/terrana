@@ -1,0 +1,32 @@
+{
+  "title": "Terrana: Zero-Config Spatial API Server",
+  "description": "<p>Terrana is a zero-config spatial API server written in Rust. Point it at a CSV, Parquet, or GeoJSON file containing lat/lon columns and immediately get a REST API with spatial queries (radius, bounding box, nearest neighbor, point-in-polygon) and geodesic geometry operations (area, convex hull, buffer, dissolve, simplify, distance) &mdash; no database setup, no PostGIS, no infrastructure. Built on DuckDB (bundled) with R-tree spatial indexing and the <code>geo</code> crate for WGS&nbsp;84 geodesic computations.</p>",
+  "upload_type": "software",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "McMeen, John"
+    }
+  ],
+  "keywords": [
+    "spatial",
+    "geospatial",
+    "gis",
+    "rest-api",
+    "duckdb",
+    "rust",
+    "rtree",
+    "spatial-index",
+    "geojson",
+    "wgs84",
+    "geodesic"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/jmcmeen/terrana",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

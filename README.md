@@ -1,5 +1,9 @@
 # Terrana
 
+[![CI](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml/badge.svg)](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/terrana.svg)](https://crates.io/crates/terrana)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 Zero-config spatial API server. Point it at a CSV, Parquet, or GeoJSON file containing lat/lon columns and immediately get a REST API with spatial queries and geometry operations — no database setup, no PostGIS, no infrastructure.
 
 ```bash
