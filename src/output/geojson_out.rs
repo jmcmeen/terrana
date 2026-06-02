@@ -5,8 +5,9 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
 
 pub fn to_geojson_response(rows: &[Value], state: &AppState) -> Result<Response, AppError> {
-    let lat_col = &state.schema.lat_col;
-    let lon_col = &state.schema.lon_col;
+    let snap = state.snapshot();
+    let lat_col = &snap.schema.lat_col;
+    let lon_col = &snap.schema.lon_col;
 
     let features: Vec<Value> = rows
         .iter()

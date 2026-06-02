@@ -1,5 +1,9 @@
+//! The resolved runtime configuration, built from parsed CLI args and shared through
+//! [`AppState`](crate::server::AppState) behind an `Arc`.
+
 use std::path::PathBuf;
 
+// Fields are retained for introspection and future handler use; not all are read today.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Config {

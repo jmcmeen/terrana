@@ -7,7 +7,38 @@ terrana serve observations.csv --lat latitude --lon longitude
 # → REST API running at http://localhost:8080
 ```
 
+## Installing Rust
+
+Terrana is built with Rust. If you don't already have a toolchain, install one with
+[rustup](https://rustup.rs) — the official Rust installer:
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+On **Windows**, download and run [`rustup-init.exe`](https://rustup.rs) (or
+`winget install Rustlang.Rustup`). Then restart your shell and confirm it worked:
+
+```bash
+rustc --version    # e.g. rustc 1.82.0
+cargo --version
+```
+
+`rustup` installs `cargo` (the build tool / package manager) alongside the compiler.
+That's all you need — Terrana bundles DuckDB, so there's **no system DuckDB, PostGIS,
+or other infrastructure to install**. (On first run, DuckDB downloads its `spatial`
+extension from the network and caches it locally.)
+
 ## Install
+
+Once published to [crates.io](https://crates.io/crates/terrana):
+
+```bash
+cargo install terrana
+```
+
+Or build and install from a checkout of this repository:
 
 ```bash
 cargo install --path .
@@ -184,24 +215,36 @@ If you use Terrana in academic research, please cite it as:
 
 Or in prose: *Terrana (2026). Zero-config spatial API server. <https://github.com/jmcmeen/terrana>*
 
+## Testing
+
+```bash
+cargo test                       # fast unit tests (offline)
+cargo test -- --include-ignored  # + integration tests (start the server; need network)
+```
+
+The integration tests in [tests/api.rs](tests/api.rs) spawn the real binary and hit
+the HTTP endpoints. They are `#[ignore]`d by default because starting the server
+downloads the DuckDB `spatial` extension on first use.
+
 ## Contributing
 
-Contributions are welcome. Here are some ways to get involved:
-
-- **Bug reports** — Open an issue describing the problem, the file format you used, and the query that triggered it.
-- **New file formats** — Terrana ingests via DuckDB; adding support for a new format usually means a small addition to `src/db/loader.rs`.
-- **Geometry operations** — New `POST /geometry/*` endpoints go in `src/handlers/geometry.rs`. All spatial math must use geodesic algorithms from the `geo` crate (never planar/Cartesian).
-- **Performance** — Benchmark with `./bench.sh`, profile with `cargo flamegraph`, and open a PR with before/after numbers.
-- **Documentation** — Improvements to this README, examples, or inline doc comments are always appreciated.
-
-### Getting started
+Contributions are welcome — bug reports, new file formats, geometry operations,
+performance work, and docs. See [CONTRIBUTING.md](CONTRIBUTING.md) for development
+setup and the pre-PR checklist, and [SECURITY.md](SECURITY.md) for how to report
+vulnerabilities.
 
 ```bash
 git clone https://github.com/jmcmeen/terrana.git
 cd terrana
 cargo build
 cargo run -- serve testdata/observations.csv
-# Run the acceptance tests from CLAUDE.md to verify everything works
 ```
 
-Please run `cargo fmt` and `cargo clippy` before submitting a PR.
+Please run `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings` before
+submitting a PR.
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your
+option. Unless you explicitly state otherwise, any contribution you submit for
+inclusion in this work shall be dual-licensed as above, without additional terms.

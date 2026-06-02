@@ -1,4 +1,9 @@
+//! `POST /geometry/*` endpoints — area, convex-hull, centroid, buffer, dissolve,
+//! simplify, distance, and bounds. All area/distance/buffer math is geodesic
+//! (Karney / WGS 84 via the `geo` crate), never planar.
+
 use crate::db;
+use crate::db::query::MAX_RESULT_LIMIT;
 use crate::error::AppError;
 use crate::server::AppState;
 use axum::extract::State;
@@ -54,10 +59,11 @@ pub async fn convex_hull(
         }
         let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
+        let snap = state.snapshot();
         let raw_pts = db::query::query_points_in_bbox(
             &state.db,
-            &state.schema.lat_col,
-            &state.schema.lon_col,
+            &snap.schema.lat_col,
+            &snap.schema.lon_col,
             min_lat,
             min_lon,
             max_lat,
@@ -165,7 +171,7 @@ pub async fn buffer(
     let mut coords = Vec::with_capacity(segments + 1);
     for i in 0..segments {
         let bearing = (i as f64) * 360.0 / (segments as f64);
-        let dest = Geodesic::destination(center, bearing, distance_m);
+        let dest = Geodesic.destination(center, bearing, distance_m);
         coords.push(geo_types::Coord {
             x: dest.x(),
             y: dest.y(),
@@ -221,13 +227,31 @@ pub async fn dissolve(
         }
         let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
 
-        db::query::query_rows_in_bbox(&state.db, min_lat, min_lon, max_lat, max_lon, 100_000)?
+        db::query::query_rows_in_bbox(
+            &state.db,
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+            MAX_RESULT_LIMIT,
+        )?
     } else {
-        db::query::query(&state.db, None, &[], None, None, None, 100_000, None, None)?
+        db::query::query(
+            &state.db,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            MAX_RESULT_LIMIT,
+            None,
+            None,
+        )?
     };
 
-    let lat_col = &state.schema.lat_col;
-    let lon_col = &state.schema.lon_col;
+    let snap = state.snapshot();
+    let lat_col = &snap.schema.lat_col;
+    let lon_col = &snap.schema.lon_col;
     let mut groups: std::collections::HashMap<String, Vec<Point<f64>>> =
         std::collections::HashMap::new();
 
@@ -306,23 +330,23 @@ pub async fn simplify(
     let simplified = match geo_geom {
         geo_types::Geometry::Polygon(p) => {
             if preserve_topology {
-                geo_types::Geometry::Polygon(p.simplify_vw(&tolerance))
+                geo_types::Geometry::Polygon(p.simplify_vw(tolerance))
             } else {
-                geo_types::Geometry::Polygon(p.simplify(&tolerance))
+                geo_types::Geometry::Polygon(p.simplify(tolerance))
             }
         }
         geo_types::Geometry::MultiPolygon(mp) => {
             if preserve_topology {
-                geo_types::Geometry::MultiPolygon(mp.simplify_vw(&tolerance))
+                geo_types::Geometry::MultiPolygon(mp.simplify_vw(tolerance))
             } else {
-                geo_types::Geometry::MultiPolygon(mp.simplify(&tolerance))
+                geo_types::Geometry::MultiPolygon(mp.simplify(tolerance))
             }
         }
         geo_types::Geometry::LineString(ls) => {
             if preserve_topology {
-                geo_types::Geometry::LineString(ls.simplify_vw(&tolerance))
+                geo_types::Geometry::LineString(ls.simplify_vw(tolerance))
             } else {
-                geo_types::Geometry::LineString(ls.simplify(&tolerance))
+                geo_types::Geometry::LineString(ls.simplify(tolerance))
             }
         }
         other => other,
@@ -351,8 +375,8 @@ pub async fn distance(
     let from_pt = extract_point(from_val, "from")?;
     let to_pt = extract_point(to_val, "to")?;
 
-    let distance_m = Geodesic::distance(from_pt, to_pt);
-    let bearing = Geodesic::bearing(from_pt, to_pt);
+    let distance_m = Geodesic.distance(from_pt, to_pt);
+    let bearing = Geodesic.bearing(from_pt, to_pt);
 
     Ok(Json(json!({
         "distance_m": distance_m,
@@ -392,8 +416,8 @@ pub async fn bounds(
     let max_lat = rect.max().y;
     let max_lon = rect.max().x;
 
-    let width_m = Geodesic::distance(Point::new(min_lon, min_lat), Point::new(max_lon, min_lat));
-    let height_m = Geodesic::distance(Point::new(min_lon, min_lat), Point::new(min_lon, max_lat));
+    let width_m = Geodesic.distance(Point::new(min_lon, min_lat), Point::new(max_lon, min_lat));
+    let height_m = Geodesic.distance(Point::new(min_lon, min_lat), Point::new(min_lon, max_lat));
 
     let envelope_poly = Polygon::new(
         LineString::from(vec![
@@ -508,4 +532,33 @@ fn extract_points_from_body(body: &Value) -> Result<Vec<Point<f64>>, AppError> {
         _ => return Err(AppError::BadRequest("Expected FeatureCollection".into())),
     }
     Ok(points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geodesic_area_of_unit_box_at_equator() {
+        // A 1° x 1° box at the equator is ~12,308 km² on the WGS 84 ellipsoid.
+        let body = json!({
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]]
+            }
+        });
+        let polys = extract_polygons_from_body(&body).unwrap();
+        assert_eq!(polys.len(), 1);
+        let area_km2 = polys[0].geodesic_area_unsigned() / 1_000_000.0;
+        assert!(
+            (12_000.0..12_700.0).contains(&area_km2),
+            "expected ~12,308 km², got {area_km2}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_polygon_input() {
+        let body = json!({ "type": "Point", "coordinates": [0.0, 0.0] });
+        assert!(extract_polygons_from_body(&body).is_err());
+    }
 }

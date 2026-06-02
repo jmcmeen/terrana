@@ -1,4 +1,8 @@
+//! `GET /query` — radius, bounding-box, and nearest-neighbor spatial queries,
+//! plus the shared `select`/`where`/`group_by`/`agg`/`limit`/`format` parameters.
+
 use crate::db;
+use crate::db::query::{DEFAULT_LIMIT, MAX_RESULT_LIMIT};
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
@@ -23,12 +27,14 @@ pub struct QueryParams {
     pub format: Option<String>,
 }
 
+/// Dispatch a `GET /query` request to the bbox, nearest, radius, or plain-table path
+/// based on which parameters are present, then serialize to the requested format.
 pub async fn query(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let qp = parse_query_params(&params)?;
-    let limit = qp.limit.unwrap_or(1000).min(100_000);
+    let limit = qp.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULT_LIMIT);
     let format = qp.format.as_deref().unwrap_or("json");
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
@@ -131,7 +137,23 @@ fn parse_bbox(s: &str) -> Result<(f64, f64, f64, f64), AppError> {
             "bbox requires exactly 4 values: minlat,minlon,maxlat,maxlon".into(),
         ));
     }
-    Ok((parts[0], parts[1], parts[2], parts[3]))
+    let (min_lat, min_lon, max_lat, max_lon) = (parts[0], parts[1], parts[2], parts[3]);
+    if !(-90.0..=90.0).contains(&min_lat) || !(-90.0..=90.0).contains(&max_lat) {
+        return Err(AppError::BadRequest(
+            "bbox latitudes must be within [-90, 90]".into(),
+        ));
+    }
+    if !(-180.0..=180.0).contains(&min_lon) || !(-180.0..=180.0).contains(&max_lon) {
+        return Err(AppError::BadRequest(
+            "bbox longitudes must be within [-180, 180]".into(),
+        ));
+    }
+    if min_lat > max_lat || min_lon > max_lon {
+        return Err(AppError::BadRequest(
+            "bbox requires minlat<=maxlat and minlon<=maxlon".into(),
+        ));
+    }
+    Ok((min_lat, min_lon, max_lat, max_lon))
 }
 
 fn parse_radius(s: &str) -> Result<f64, AppError> {
@@ -171,4 +193,57 @@ fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
 
 fn parse_select(select: Option<&str>) -> Option<Vec<String>> {
     select.map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bbox_parses_valid_input() {
+        assert_eq!(
+            parse_bbox("35.0,-84.0,37.0,-81.0").unwrap(),
+            (35.0, -84.0, 37.0, -81.0)
+        );
+    }
+
+    #[test]
+    fn bbox_rejects_out_of_range_and_inverted() {
+        assert!(parse_bbox("35.0,-84.0,37.0").is_err()); // too few
+        assert!(parse_bbox("-100.0,0.0,10.0,1.0").is_err()); // lat < -90
+        assert!(parse_bbox("0.0,-200.0,1.0,1.0").is_err()); // lon < -180
+        assert!(parse_bbox("37.0,-81.0,35.0,-84.0").is_err()); // min > max
+        assert!(parse_bbox("a,b,c,d").is_err()); // non-numeric
+    }
+
+    #[test]
+    fn radius_parses_units() {
+        assert_eq!(parse_radius("10km").unwrap(), 10_000.0);
+        assert_eq!(parse_radius("5000m").unwrap(), 5000.0);
+        assert_eq!(parse_radius("1mi").unwrap(), 1609.344);
+        assert_eq!(parse_radius("100").unwrap(), 100.0);
+        assert!(parse_radius("abc").is_err());
+    }
+
+    #[test]
+    fn where_clauses_split_on_colon() {
+        let clauses = parse_where_clauses(Some("quality_grade:research,species:Bombus"));
+        assert_eq!(
+            clauses,
+            vec![
+                ("quality_grade".to_string(), "research".to_string()),
+                ("species".to_string(), "Bombus".to_string()),
+            ]
+        );
+        assert!(parse_where_clauses(None).is_empty());
+    }
+
+    #[test]
+    fn select_trims_columns() {
+        assert_eq!(
+            parse_select(Some("species, observed_on")),
+            Some(vec!["species".to_string(), "observed_on".to_string()])
+        );
+        assert_eq!(parse_select(None), None);
+    }
 }

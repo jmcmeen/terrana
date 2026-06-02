@@ -62,7 +62,7 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 duckdb = { version = "1", features = ["bundled"] }
-geo = "0.29"
+geo = "0.33"
 geo-types = "0.7"
 geojson = { version = "1", features = ["geo-types"] }
 serde = { version = "1", features = ["derive"] }
