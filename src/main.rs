@@ -124,8 +124,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Ingest the source file into `conn`, build the spatial index, and assemble a
-/// [`Snapshot`]. Used both at startup and on every `--watch` reload, so it first
-/// drops any existing dataset artifacts to start from a clean slate.
+/// [`Snapshot`]. Used both at startup and on every `--watch` reload.
+///
+/// The work is ordered **stage → validate → promote** so a reload is failure-atomic:
+/// the file is read into a staging table and its lat/lon columns are validated *before*
+/// the live dataset is dropped. Any failure in that risky phase returns `Err` with the
+/// previous dataset left intact, so `--watch` keeps serving the old data on a bad/
+/// half-written file instead of blanking out.
 fn build_snapshot(
     conn: &Connection,
     source: &str,
@@ -134,14 +139,26 @@ fn build_snapshot(
     lat_override: Option<&str>,
     lon_override: Option<&str>,
 ) -> Result<Snapshot, AppError> {
-    db::loader::drop_dataset(conn)?;
-    db::loader::load_file(conn, abs_path, table)?;
+    // 1. Risky external read into a staging table — the live dataset is untouched on failure.
+    db::loader::stage_file(conn, abs_path, table)?;
 
-    let table_info = db::get_table_info_conn(conn)?;
+    // 2. Validate the new file's columns before committing to the swap. On failure,
+    //    discard the stage and bail so a bad reload keeps serving the old data.
+    let staged = db::get_table_info_relation(conn, "raw_data_stage")?;
     let (lat_col, lon_col) =
-        db::loader::detect_lat_lon(&table_info.col_names, lat_override, lon_override)?;
+        match db::loader::detect_lat_lon(&staged.col_names, lat_override, lon_override) {
+            Ok(cols) => cols,
+            Err(e) => {
+                let _ = db::loader::discard_stage(conn);
+                return Err(e);
+            }
+        };
     info!(lat = %lat_col, lon = %lon_col, "columns detected");
 
+    // 3. Commit: drop the previous dataset and promote the staged tables to live.
+    db::loader::promote_stage(conn)?;
+
+    // 4. Build the geometry column + R-tree index (operates on in-DB data; reliable).
     let start_build = Instant::now();
     db::loader::add_spatial_index(conn, &lat_col, &lon_col)?;
     let index_build_ms = start_build.elapsed().as_millis();
@@ -151,13 +168,13 @@ fn build_snapshot(
 
     let schema = TableSchema {
         source: source.to_string(),
-        row_count: table_info.row_count,
+        row_count: staged.row_count,
         lat_col,
         lon_col,
-        columns: table_info
+        columns: staged
             .col_names
             .iter()
-            .zip(table_info.col_types.iter())
+            .zip(staged.col_types.iter())
             .map(|(name, dtype)| ColumnMeta {
                 name: name.clone(),
                 dtype: dtype.clone(),

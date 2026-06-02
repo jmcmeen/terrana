@@ -5,6 +5,23 @@ All notable changes to Terrana will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-02
+
+### Fixed
+
+- `--watch` reloads no longer blank out the dataset when the source file is malformed or half-written mid-save. The new file is now staged and its lat/lon columns validated *before* the live dataset is replaced, so a failed reload leaves the previous data serving and the watcher recovers on the next good write.
+- `testdata/bench.sh` no longer exits non-zero (Error 143) when its background server is terminated on an otherwise successful run, so `make bench` reports success correctly. Genuine failures still propagate.
+- Packaging: `testdata/generate.py` is no longer published to crates.io — the `exclude` glob missed the renamed generator, so benchmark/dev tooling was leaking into the package.
+
+### Changed
+
+- Consolidated the two benchmark data generators into a single `testdata/generate.py` (`--preset bench` for 10K/100K/1M, `--preset 250m` for the 250M-row set); removed `generate_benchdata.py` and `generate_250m.py`.
+- Moved `bench.sh` into `testdata/` (now runnable from any directory) and added `make gen`, `make gen-250m`, and `make bench` targets.
+
+### Added
+
+- Integration tests for `--watch` reload: new rows are reflected, and the old dataset is preserved when a reload hits a bad file.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added

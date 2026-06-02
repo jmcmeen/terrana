@@ -47,14 +47,16 @@ pub struct TableInfo {
     pub row_count: i64,
 }
 
-/// Discover schema of the `data` view on a connection.
-pub fn get_table_info_conn(conn: &Connection) -> Result<TableInfo, AppError> {
+/// Discover the schema (column names/types + row count) of an arbitrary relation.
+/// `relation` must be a trusted, internal identifier (e.g. `data`, `raw_data_stage`) —
+/// it is interpolated directly into SQL and must never come from user input.
+pub fn get_table_info_relation(conn: &Connection, relation: &str) -> Result<TableInfo, AppError> {
     let mut col_names = Vec::new();
     let mut col_types = Vec::new();
 
     {
         let mut stmt = conn
-            .prepare("DESCRIBE data")
+            .prepare(&format!("DESCRIBE {}", relation))
             .map_err(|e| AppError::Internal(anyhow::anyhow!("DESCRIBE error: {}", e)))?;
         let mut rows = stmt
             .query([])
@@ -75,7 +77,9 @@ pub fn get_table_info_conn(conn: &Connection) -> Result<TableInfo, AppError> {
     }
 
     let row_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM data", [], |row| row.get(0))
+        .query_row(&format!("SELECT COUNT(*) FROM {}", relation), [], |row| {
+            row.get(0)
+        })
         .map_err(|e| AppError::Internal(anyhow::anyhow!("COUNT error: {}", e)))?;
 
     Ok(TableInfo {
