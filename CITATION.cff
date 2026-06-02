@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use Terrana in academic research, please cite it using the metadata from this file."
+title: "Terrana: Zero-Config Spatial API Server"
+abstract: >-
+  Terrana is a zero-config spatial API server written in Rust. Point it at a
+  CSV, Parquet, or GeoJSON file containing lat/lon columns and immediately get
+  a REST API with spatial queries and geodesic geometry operations — no database
+  setup, no PostGIS, no infrastructure. Built on axum and DuckDB with R-tree
+  spatial indexing.
+type: software
+authors:
+  - family-names: McMeen
+    given-names: John
+    email: johnmcmeen@gmail.com
+version: 0.1.0
+date-released: 2026-06-02
+doi: 10.5281/zenodo.20515989
+license:
+  - MIT
+  - Apache-2.0
+repository-code: "https://github.com/jmcmeen/terrana"
+url: "https://github.com/jmcmeen/terrana"
+keywords:
+  - spatial
+  - geospatial
+  - geojson
+  - duckdb
+  - rust
+  - rest-api
+  - gis
