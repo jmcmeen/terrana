@@ -31,8 +31,13 @@ jobs:
           # bundled DuckDB amalgamation needs a newer C++ toolchain than CentOS-7-based
           # manylinux2014 ships. Still broadly portable (glibc 2.28+: RHEL8, Ubuntu 18.10+).
           - { os: ubuntu-latest,  target: x86_64,  manylinux: "2_28" }
+          # Both macOS wheels build on macos-latest (Apple Silicon, plentiful runners).
+          # The x86_64 wheel is cross-compiled there rather than on a macos-13 Intel
+          # runner — those are scarce (hours-long queues) and being retired by GitHub.
+          # arm64 -> x86_64 is the easy cross-direction: Apple's clang/SDK ships both
+          # arch slices, so the bundled DuckDB C++ builds for x86_64 from the arm64 host.
           - { os: macos-latest,   target: aarch64, manylinux: "" }
-          - { os: macos-13,       target: x86_64,  manylinux: "" }
+          - { os: macos-latest,   target: x86_64,  manylinux: "" }
           - { os: windows-latest, target: x64,     manylinux: "" }
     steps:
       - uses: actions/checkout@v4
