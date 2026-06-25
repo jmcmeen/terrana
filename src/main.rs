@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod db;
 mod error;
+mod geometry;
 mod handlers;
 mod output;
 mod server;
