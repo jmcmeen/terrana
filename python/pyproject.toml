@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "terrana"
+description = "Spatial queries and geodesic geometry for Python"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+keywords = ["spatial", "gis", "geospatial", "duckdb", "geodesic"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+# Version is read from python/Cargo.toml (kept in lockstep with the Rust crate).
+dynamic = ["version"]
+
+[tool.maturin]
+# Build the Rust cdylib `terrana_py` and expose it to Python as `terrana`.
+module-name = "terrana"
