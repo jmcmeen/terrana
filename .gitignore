@@ -4,3 +4,4 @@
 testdata/bench_*.csv
 testdata/bench_*.csv.gz
 .claude/settings.local.json
+/python/tests/__pycache__

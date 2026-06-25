@@ -20,4 +20,11 @@ crate-type = ["cdylib"]
 terrana_core = { package = "terrana", path = "..", features = ["server"] }
 # abi3-py39: build a single stable-ABI wheel that runs on CPython 3.9 .. 3.14+.
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+# Version-matched to pyo3; converts serde_json::Value query rows into Python objects.
+pythonize = "0.23"
 tokio = { version = "1", features = ["full"] }
+# Same bundled DuckDB as the engine (features unify), so we can name `Connection`.
+duckdb = { version = "1", features = ["bundled"] }
+geo-types = "0.7"
+geojson = { version = "1", features = ["geo-types"] }
+serde_json = "1"

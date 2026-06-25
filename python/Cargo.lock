@@ -1980,6 +1980,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pythonize"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91a6ee7a084f913f98d70cdc3ebec07e852b735ae3059a1500db2661265da9ff"
+dependencies = [
+ "pyo3",
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2791,7 +2801,12 @@ dependencies = [
 name = "terrana-py"
 version = "0.2.0"
 dependencies = [
+ "duckdb",
+ "geo-types",
+ "geojson",
  "pyo3",
+ "pythonize",
+ "serde_json",
  "terrana",
  "tokio",
 ]
