@@ -12,6 +12,10 @@ terrana serve observations.csv --lat latitude --lon longitude
 # → REST API running at http://localhost:8080
 ```
 
+Terrana is three things in one: a **CLI / HTTP server** (above), a **Rust library**
+(`cargo add terrana`), and a **Python package** (`pip install terrana`) — the same
+engine, embeddable in-process or served over HTTP.
+
 ## Installing Rust
 
 Terrana is built with Rust. If you don't already have a toolchain, install one with
@@ -48,6 +52,17 @@ Or build and install from a checkout of this repository:
 
 ```bash
 cargo install --path .
+```
+
+### As a library dependency
+
+Terrana is a `lib + bin` crate — add it to your own Rust project to use its
+ingestion, spatial queries, and geodesic geometry directly (see
+[Rust library](#rust-library) below for usage):
+
+```bash
+cargo add terrana                        # includes the embedded Axum server
+cargo add terrana --no-default-features  # pure library, without axum / tokio
 ```
 
 ## Usage
@@ -160,6 +175,93 @@ curl -X POST localhost:8080/geometry/distance \
   -H "Content-Type: application/json" \
   -d '{"from":{"type":"Point","coordinates":[-82.54,36.54]},"to":{"type":"Point","coordinates":[-82.55,36.55]}}'
 ```
+
+## Rust library
+
+The same engine is available as a library — load a file, then run spatial queries
+and geodesic geometry without the HTTP server:
+
+```rust
+use terrana::{db, ingest_file};
+use terrana::geometry::measure::geodesic_distance;
+use geo_types::Point; // Terrana's geometry operates on geo-types
+
+// Load a CSV / Parquet / GeoJSON file and build the spatial R-tree index.
+let conn = db::create_connection()?;
+let info = ingest_file(&conn, "observations.csv".as_ref(), None, None, None)?;
+println!("loaded {} rows (lat={}, lon={})", info.row_count, info.lat_col, info.lon_col);
+
+// Geodesic distance + bearing (WGS 84, never planar).
+let d = geodesic_distance(Point::new(-82.54, 36.54), Point::new(-82.55, 36.55));
+println!("{:.0} m at bearing {:.1}°", d.distance_m, d.bearing_deg);
+```
+
+Spatial queries run through the DuckDB-backed builders in `terrana::db::query`
+(`bbox_filter` / `radius_filter` + `query`); geodesic geometry lives in
+`terrana::geometry` (`area`, `buffer`, `hull`, `simplify`, `measure`). The `server`
+feature (the Axum router, on by default) can be disabled for a pure-library
+dependency — `cargo add terrana --no-default-features`.
+
+## Python
+
+Terrana ships Python bindings backed by the same Rust engine — no separate Rust toolchain needed:
+
+```bash
+pip install terrana        # or: uv pip install terrana
+```
+
+The wheel is a single stable-ABI (`abi3`) build that runs on CPython 3.9 – 3.14+.
+
+### Library mode (in-process, no server)
+
+```python
+import terrana, json
+
+session = terrana.load_csv("observations.csv")   # also load_parquet / load_geojson
+print(session.row_count, session.lat_col, session.lon_col)
+
+# Spatial queries take (lat, lon) — mirroring the REST API's ?lat=&lon=.
+# Each row is a dict; radius/nearest add a `_distance_km` key.
+rows = session.query_radius(36.54, -82.54, 5000)          # lat, lon, radius_m
+box  = session.query_bbox(35.0, -84.0, 37.0, -81.0)       # min_lat, min_lon, max_lat, max_lon
+near = session.query_nearest(36.5, -82.5, 5)              # lat, lon, k
+
+# Geodesic geometry takes (lon, lat) — GeoJSON coordinate order. GeoJSON outputs
+# come back as JSON strings (use json.loads); area/distance come back as dicts.
+d    = terrana.geodesic_distance(-82.54, 36.54, -82.55, 36.55)   # lon1, lat1, lon2, lat2
+a    = terrana.geodesic_area('{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}')
+hull = json.loads(terrana.convex_hull('{"type":"MultiPoint","coordinates":[[0,0],[1,0],[0,1]]}'))
+buf  = json.loads(terrana.buffer(-82.5, 36.5, 5000, segments=64))  # lon, lat, distance_m
+```
+
+> **Coordinate order:** spatial queries are `(lat, lon)` (REST-API order); geometry
+> functions are `(lon, lat)` (GeoJSON order). Mind the difference.
+
+### Server mode (embedded HTTP server)
+
+Run the full REST API in a background thread and manage it from Python:
+
+```python
+import terrana, requests
+
+session = terrana.load_csv("observations.csv")
+
+with session.serve_background(port=8080) as server:
+    # The complete REST API is live at http://localhost:8080
+    r = requests.get("http://localhost:8080/query?lat=36.5&lon=-82.5&radius=10km")
+    print(r.json())
+# server is shut down and its thread joined on context exit
+
+# Or manage the lifecycle explicitly:
+server = session.serve_background(port=8080)
+# ... use the API ...
+server.shutdown()       # stops the server and joins the thread (idempotent)
+
+# Or block in the foreground until Ctrl-C:
+# session.serve(port=8080)
+```
+
+The tokio runtime lives entirely inside a Rust thread, so serving never blocks Python's GIL.
 
 ## Docker
 

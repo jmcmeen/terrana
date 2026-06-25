@@ -2,5 +2,6 @@ target/
 .git/
 .github/
 testdata/
+python/
 *.md
 !README.md

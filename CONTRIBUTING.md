@@ -10,10 +10,15 @@ documentation, new file formats, geometry operations, and performance work.
   and the exact query that triggered it. A minimal sample file helps enormously.
 - **New file formats** — Terrana ingests through DuckDB; adding a format usually
   means a small addition to [`src/db/loader.rs`](src/db/loader.rs).
-- **Geometry operations** — New `POST /geometry/*` endpoints go in
-  [`src/handlers/geometry.rs`](src/handlers/geometry.rs). All spatial math **must**
-  use geodesic algorithms from the `geo` crate — never planar/Cartesian (see
-  [Geodesic rules](#geodesic-rules) below).
+- **Geometry operations** — The geodesic math lives in pure functions under
+  [`src/geometry/`](src/geometry/) (`area.rs`, `buffer.rs`, `hull.rs`, `measure.rs`, …);
+  the `POST /geometry/*` handlers in
+  [`src/handlers/geometry.rs`](src/handlers/geometry.rs) are thin glue over them. All
+  spatial math **must** use geodesic algorithms from the `geo` crate — never
+  planar/Cartesian (see [Geodesic rules](#geodesic-rules) below).
+- **Python bindings** — The PyO3 bindings live in [`python/`](python/) and re-export
+  the same engine; new Python surface goes in [`python/src/lib.rs`](python/src/lib.rs)
+  with a test in [`python/tests/`](python/tests/).
 - **Performance** — Benchmark with `./testdata/bench.sh` (or `make bench`), profile with `cargo flamegraph`,
   and open a PR with before/after numbers.
 - **Documentation** — Improvements to the README, examples, or inline doc comments
@@ -58,6 +63,17 @@ hit the HTTP endpoints. They are `#[ignore]`d by default because starting the se
 requires the DuckDB `spatial` extension to be available; run them with
 `--include-ignored` in an environment with network access.
 
+For changes to the **Python bindings**, build and test them with
+[uv](https://docs.astral.sh/uv/):
+
+```bash
+cd python
+uv venv --python 3.13 && source .venv/bin/activate
+uv pip install maturin pytest
+maturin develop              # build the extension into the venv
+uv run pytest tests/ -v      # library + server-mode tests
+```
+
 ## Pull request guidelines
 
 - Keep PRs focused — one logical change per PR.
@@ -65,6 +81,21 @@ requires the DuckDB `spatial` extension to be available; run them with
 - Update [`CHANGELOG.md`](CHANGELOG.md) under the `Unreleased` section.
 - Update the README and inline docs when you change user-facing behavior.
 - Write commit messages in the imperative mood ("Add buffer endpoint", not "Added").
+
+## Releasing & versioning
+
+Releases are cut by the maintainer only. The Rust crate and the Python wheel ship
+from a **single `vX.Y.Z` tag** and **share one version**, so:
+
+- **Any change to the Rust crate _or_ the Python bindings needs a version bump** in
+  [`Cargo.toml`](Cargo.toml) at release. crates.io versions are immutable and the
+  wheel version is taken from the tag, so the published version must equal the tag —
+  CI fails the publish if they differ. Follow [SemVer](https://semver.org).
+- Flow: bump `Cargo.toml` → land through `staging` → merge `staging → main` → push
+  `vX.Y.Z` on `main`; the tag publishes both registries.
+
+Contributors don't bump the version in a PR — just note user-facing changes in
+[`CHANGELOG.md`](CHANGELOG.md); the maintainer handles the bump and tag at release.
 
 ## Geodesic rules
 
