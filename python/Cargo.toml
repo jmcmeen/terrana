@@ -6,11 +6,11 @@ publish = false
 description = "Python bindings for Terrana — spatial queries and geodesic geometry"
 license = "MIT OR Apache-2.0"
 
-# The cdylib is named `terrana_py` (not `terrana`) to avoid colliding with the
-# `terrana` library crate it depends on. Maturin renames the built module to
-# `terrana` for Python via `module-name` in pyproject.toml.
+# Builds directly into the Python module `terrana`. It can take that name because
+# the engine crate it wraps is imported under the alias `terrana_core` below — a
+# crate and a same-named `#[pymodule] fn` can't coexist in one file.
 [lib]
-name = "terrana_py"
+name = "terrana"
 crate-type = ["cdylib"]
 
 [dependencies]
