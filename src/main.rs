@@ -162,7 +162,14 @@ fn build_snapshot(
     info!(ms = %index_build_ms, "spatial index built");
 
     // Assemble the snapshot (extent + schema) via the shared library helper.
-    server::build_snapshot(conn, source, &lat_col, &lon_col, staged.row_count, index_build_ms)
+    server::build_snapshot(
+        conn,
+        source,
+        &lat_col,
+        &lon_col,
+        staged.row_count,
+        index_build_ms,
+    )
 }
 
 /// Spawn a background thread that watches `abs_path` and re-ingests it on change,

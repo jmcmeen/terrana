@@ -129,7 +129,8 @@ struct TerranaSession {
 /// format (CSV / Parquet / GeoJSON).
 fn open_session(path: &str) -> PyResult<TerranaSession> {
     let conn = terrana_core::db::create_connection().map_err(pyerr)?;
-    let info = terrana_core::ingest_file(&conn, Path::new(path), None, None, None).map_err(pyerr)?;
+    let info =
+        terrana_core::ingest_file(&conn, Path::new(path), None, None, None).map_err(pyerr)?;
     Ok(TerranaSession {
         db: Arc::new(Mutex::new(conn)),
         lat_col: info.lat_col,
@@ -275,9 +276,19 @@ impl TerranaSession {
     /// session — no re-ingestion, just a snapshot built from the live connection.
     fn build_state(&self, port: u16, bind: &str) -> PyResult<AppState> {
         let snapshot = {
-            let conn = self.db.lock().map_err(|_| pyerr("database lock poisoned"))?;
-            server::build_snapshot(&conn, &self.source, &self.lat_col, &self.lon_col, self.row_count, 0)
-                .map_err(pyerr)?
+            let conn = self
+                .db
+                .lock()
+                .map_err(|_| pyerr("database lock poisoned"))?;
+            server::build_snapshot(
+                &conn,
+                &self.source,
+                &self.lat_col,
+                &self.lon_col,
+                self.row_count,
+                0,
+            )
+            .map_err(pyerr)?
         };
         let config = Config {
             file: std::path::PathBuf::from(&self.source),
@@ -336,6 +347,22 @@ impl TerranaServer {
     ) -> bool {
         self.shutdown(py);
         false
+    }
+}
+
+impl Drop for TerranaServer {
+    /// Stop the server if neither `shutdown()` nor the context manager already did,
+    /// so a dropped handle never leaks the background thread. A plain join (the GIL
+    /// may be held during drop) is safe here because the server thread runs only
+    /// Rust (tokio / axum / DuckDB) and never acquires the GIL. No-op after an
+    /// explicit `shutdown()`, which has already taken `tx` and `handle`.
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 

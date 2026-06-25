@@ -304,14 +304,13 @@ pub fn ingest_file(
     stage_file(conn, path, table)?;
 
     let staged = crate::db::get_table_info_relation(conn, "raw_data_stage")?;
-    let (lat_col, lon_col) =
-        match detect_lat_lon(&staged.col_names, lat_override, lon_override) {
-            Ok(cols) => cols,
-            Err(e) => {
-                let _ = discard_stage(conn);
-                return Err(e);
-            }
-        };
+    let (lat_col, lon_col) = match detect_lat_lon(&staged.col_names, lat_override, lon_override) {
+        Ok(cols) => cols,
+        Err(e) => {
+            let _ = discard_stage(conn);
+            return Err(e);
+        }
+    };
 
     promote_stage(conn)?;
     add_spatial_index(conn, &lat_col, &lon_col)?;

@@ -131,3 +131,23 @@ def test_serve_background_explicit_shutdown(session):
     finally:
         server.shutdown()
         server.shutdown()  # idempotent
+
+
+def test_serve_background_drop_stops_server(session):
+    # Dropping the handle without shutdown() or the context manager must still stop
+    # the server — Drop signals the runtime and joins the thread.
+    port = _free_port()
+    server = session.serve_background(port=port)
+    deadline = time.time() + 15
+    healthy = False
+    while time.time() < deadline:
+        try:
+            if _get(port, "/health", 1).status == 200:
+                healthy = True
+                break
+        except Exception:
+            time.sleep(0.3)
+    assert healthy, "embedded server did not become healthy"
+    del server  # no shutdown(), no context manager
+    with pytest.raises(Exception):
+        _get(port, "/health", 1)
