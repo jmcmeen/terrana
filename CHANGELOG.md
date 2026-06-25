@@ -5,6 +5,20 @@ All notable changes to Terrana will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-25
+
+### Added
+
+- **`terrana` command line in the Python package.** `pip install terrana` now installs a `terrana` console command that runs the exact same server as the standalone Rust binary — `terrana serve <file> [--lat … --lon … --table … --port … --bind … --watch --disk]`. The Python and Rust distributions now share one CLI, so `pip install terrana && terrana serve data.csv` works with no Rust toolchain. (The in-process library API and `serve_background`/`serve` are unchanged.)
+
+### Changed
+
+- The CLI (argument parsing + serve orchestration) moved out of the binary into the library as `terrana::cli::run`, now shared by the `terrana` binary and the Python console script. `clap` became part of the `server` feature, keeping the `default-features = false` pure-library build free of it.
+
+### Fixed
+
+- Python wheels: the PyPI publish workflow builds Linux wheels in a `manylinux_2_28` container (was the default `manylinux2014`), whose C++ toolchain is new enough to compile the bundled DuckDB engine — the manylinux2014 build failed in the `libduckdb-sys` build script.
+
 ## [0.2.0] - 2026-06-25
 
 ### Added

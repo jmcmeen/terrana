@@ -42,6 +42,8 @@ pub mod geometry;
 
 // HTTP server layer — gated so library-only consumers avoid axum/tokio/tower.
 #[cfg(feature = "server")]
+pub mod cli;
+#[cfg(feature = "server")]
 pub mod handlers;
 #[cfg(feature = "server")]
 pub mod output;

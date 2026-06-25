@@ -449,6 +449,46 @@ fn buffer(lon: f64, lat: f64, distance_m: f64, segments: usize) -> PyResult<Stri
     Ok(feature_json((&poly).into(), props))
 }
 
+/// Entry point for the `terrana` console script (`pip install terrana` → `terrana
+/// serve …`). Runs the exact same CLI as the standalone binary, by reading argv from
+/// `sys.argv` and driving [`terrana_core::cli::run`] — which ingests the file, builds
+/// the spatial index, and serves the REST API until the process is terminated.
+///
+/// Two details keep it behaving identically to the native binary:
+/// * `sys.argv[0]` (the launcher's path) is replaced with `terrana`, so clap's
+///   `--help` / `--version` / usage text reads correctly.
+/// * Python installs its own `SIGINT` handler (which raises `KeyboardInterrupt`).
+///   While the server blocks with the GIL released, that handler never gets a chance
+///   to run, so `Ctrl-C` would be swallowed. Resetting `SIGINT` to the OS default
+///   makes `Ctrl-C` terminate the process immediately, exactly like the binary.
+#[pyfunction]
+fn _run_cli(py: Python<'_>) -> PyResult<()> {
+    let argv: Vec<String> = py.import("sys")?.getattr("argv")?.extract()?;
+    let mut args = Vec::with_capacity(argv.len().max(1));
+    args.push("terrana".to_string());
+    args.extend(argv.into_iter().skip(1));
+
+    // Restore the default SIGINT disposition. `signal.signal` is main-thread-only,
+    // which the console-script entry point satisfies. See the doc comment above.
+    let signal = py.import("signal")?;
+    signal.call_method1(
+        "signal",
+        (signal.getattr("SIGINT")?, signal.getattr("SIG_DFL")?),
+    )?;
+
+    // Release the GIL while the server runs so signals and threads behave as they do
+    // under the standalone binary.
+    if let Err(e) = py.allow_threads(move || terrana_core::cli::run(args)) {
+        // Mirror the binary's failure UX (`Error: …` on stderr, exit code 1) rather
+        // than surfacing a Python traceback for an operational error (e.g. missing
+        // file). clap already exits the process for `--help`/`--version`/bad args, so
+        // exiting here is consistent with the rest of the CLI.
+        eprintln!("Error: {e:?}");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// The `terrana` Python module.
 #[pymodule]
 fn terrana(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -461,5 +501,6 @@ fn terrana(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geodesic_area, m)?)?;
     m.add_function(wrap_pyfunction!(convex_hull, m)?)?;
     m.add_function(wrap_pyfunction!(buffer, m)?)?;
+    m.add_function(wrap_pyfunction!(_run_cli, m)?)?;
     Ok(())
 }

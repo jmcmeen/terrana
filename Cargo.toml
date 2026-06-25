@@ -1,6 +1,6 @@
 [package]
 name = "terrana"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.82"
 authors = ["John McMeen <johnmcmeen@gmail.com>"]
@@ -37,12 +37,14 @@ required-features = ["server"]
 
 [features]
 default = ["server"]
-# The HTTP server layer. Disable (`default-features = false`) to use Terrana as a
-# pure library without pulling in axum / tokio / tower.
-server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio"]
+# The HTTP server layer (axum router) plus the `terrana` CLI (`cli::run`, shared by the
+# binary and the Python console script). Disable (`default-features = false`) to use
+# Terrana as a pure library without pulling in axum / tokio / tower / clap.
+server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio", "dep:clap"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+# Only the `server` feature (the CLI) needs clap; keep it out of the lean library build.
+clap = { version = "4", features = ["derive"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.8", optional = true }
 tower = { version = "0.5", optional = true }
