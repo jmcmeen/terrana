@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 /// the extension module. Returns `"ok"` on success.
 #[pyfunction]
 fn ping() -> PyResult<String> {
-    terrana::db::create_connection()
+    terrana_core::db::create_connection()
         .map(|_| "ok".to_string())
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
