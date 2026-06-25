@@ -14,7 +14,10 @@ name = "terrana_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-terrana = { path = "..", features = ["server"] }
+# Imported as `terrana_core` (not `terrana`) so it doesn't collide with the
+# `#[pymodule] fn terrana` in src/lib.rs — a local item named `terrana` shadows a
+# dependency crate of the same name, which breaks `terrana::...` path resolution.
+terrana_core = { package = "terrana", path = "..", features = ["server"] }
 # abi3-py39: build a single stable-ABI wheel that runs on CPython 3.9 .. 3.14+.
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 tokio = { version = "1", features = ["full"] }
