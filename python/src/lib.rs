@@ -129,7 +129,8 @@ struct TerranaSession {
 /// format (CSV / Parquet / GeoJSON).
 fn open_session(path: &str) -> PyResult<TerranaSession> {
     let conn = terrana_core::db::create_connection().map_err(pyerr)?;
-    let info = terrana_core::ingest_file(&conn, Path::new(path), None, None, None).map_err(pyerr)?;
+    let info =
+        terrana_core::ingest_file(&conn, Path::new(path), None, None, None).map_err(pyerr)?;
     Ok(TerranaSession {
         db: Arc::new(Mutex::new(conn)),
         lat_col: info.lat_col,
@@ -275,9 +276,19 @@ impl TerranaSession {
     /// session — no re-ingestion, just a snapshot built from the live connection.
     fn build_state(&self, port: u16, bind: &str) -> PyResult<AppState> {
         let snapshot = {
-            let conn = self.db.lock().map_err(|_| pyerr("database lock poisoned"))?;
-            server::build_snapshot(&conn, &self.source, &self.lat_col, &self.lon_col, self.row_count, 0)
-                .map_err(pyerr)?
+            let conn = self
+                .db
+                .lock()
+                .map_err(|_| pyerr("database lock poisoned"))?;
+            server::build_snapshot(
+                &conn,
+                &self.source,
+                &self.lat_col,
+                &self.lon_col,
+                self.row_count,
+                0,
+            )
+            .map_err(pyerr)?
         };
         let config = Config {
             file: std::path::PathBuf::from(&self.source),
