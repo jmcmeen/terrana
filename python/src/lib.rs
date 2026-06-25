@@ -350,6 +350,22 @@ impl TerranaServer {
     }
 }
 
+impl Drop for TerranaServer {
+    /// Stop the server if neither `shutdown()` nor the context manager already did,
+    /// so a dropped handle never leaks the background thread. A plain join (the GIL
+    /// may be held during drop) is safe here because the server thread runs only
+    /// Rust (tokio / axum / DuckDB) and never acquires the GIL. No-op after an
+    /// explicit `shutdown()`, which has already taken `tx` and `handle`.
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// Load a CSV file and build its spatial index, returning an open session.
 #[pyfunction]
 fn load_csv(path: &str) -> PyResult<TerranaSession> {
