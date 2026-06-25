@@ -1,0 +1,20 @@
+[package]
+name = "terrana-py"
+version = "0.2.0"
+edition = "2021"
+publish = false
+description = "Python bindings for Terrana — spatial queries and geodesic geometry"
+license = "MIT OR Apache-2.0"
+
+# The cdylib is named `terrana_py` (not `terrana`) to avoid colliding with the
+# `terrana` library crate it depends on. Maturin renames the built module to
+# `terrana` for Python via `module-name` in pyproject.toml.
+[lib]
+name = "terrana_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+terrana = { path = "..", features = ["server"] }
+# abi3-py39: build a single stable-ABI wheel that runs on CPython 3.9 .. 3.14+.
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+tokio = { version = "1", features = ["full"] }
