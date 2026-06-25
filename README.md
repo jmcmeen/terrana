@@ -212,6 +212,20 @@ pip install terrana        # or: uv pip install terrana
 
 The wheel is a single stable-ABI (`abi3`) build that runs on CPython 3.9 – 3.14+.
 
+### Command line
+
+The wheel installs a `terrana` command — the same CLI as the Rust binary, with no Rust
+toolchain required:
+
+```bash
+pip install terrana
+terrana serve observations.csv --lat latitude --lon longitude
+# → REST API running at http://localhost:8080
+```
+
+Every option the binary accepts works here too (`--port`, `--bind`, `--watch`, `--disk`,
+`--table`, `--lat`, `--lon`) — see [Usage](#usage) above. `Ctrl-C` stops the server.
+
 ### Library mode (in-process, no server)
 
 ```python

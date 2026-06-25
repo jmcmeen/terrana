@@ -10,7 +10,10 @@ Run with::
 
 import json
 import os
+import signal
 import socket
+import subprocess
+import sys
 import time
 import urllib.request
 
@@ -151,3 +154,58 @@ def test_serve_background_drop_stops_server(session):
     del server  # no shutdown(), no context manager
     with pytest.raises(Exception):
         _get(port, "/health", 1)
+
+
+# --- CLI (the `terrana` console script installed by the wheel) ---
+
+# The console script lives next to the interpreter that installed the wheel.
+CLI = os.path.join(os.path.dirname(sys.executable), "terrana")
+
+cli_required = pytest.mark.skipif(
+    not os.path.exists(CLI), reason="terrana console script not installed in this env"
+)
+
+
+@cli_required
+def test_cli_version():
+    out = subprocess.run([CLI, "--version"], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0
+    assert out.stdout.startswith("terrana ")
+
+
+@cli_required
+def test_cli_serve_and_health():
+    """`terrana serve` runs the same server as the binary, and SIGINT stops it."""
+    port = _free_port()
+    # Discard the server's logs (don't PIPE — an unread pipe could fill and stall the
+    # child under request-trace logging).
+    proc = subprocess.Popen(
+        [CLI, "serve", DATA, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.time() + 30
+        healthy = False
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                raise AssertionError("terrana serve exited before becoming healthy")
+            try:
+                if json.loads(_get(port, "/health", 1).read())["status"] == "ok":
+                    healthy = True
+                    break
+            except Exception:
+                time.sleep(0.3)
+        assert healthy, "terrana serve did not become healthy"
+        rows = json.loads(_get(port, "/query?bbox=35.0,-84.0,37.0,-81.0", 5).read())
+        assert len(rows) > 0
+    finally:
+        # The console script resets SIGINT to the OS default, so Ctrl-C terminates the
+        # process just like the Rust binary (rather than being swallowed by Python).
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise AssertionError("terrana serve did not exit on SIGINT")

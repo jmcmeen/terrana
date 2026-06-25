@@ -96,8 +96,8 @@ terrana/
 │   ├── observations.csv       ← lat/lon point data (id, species, observed_on, quality_grade, latitude, longitude, count)
 │   └── parks.geojson          ← polygon features for testing /query/within and /geometry/area
 └── src/
-    ├── main.rs                ← entry point: parse CLI args, build config, start server
-    ├── cli.rs                 ← clap arg structs and subcommands
+    ├── main.rs                ← thin binary shell: forwards argv to terrana::cli::run
+    ├── cli.rs                 ← clap CLI + serve orchestration (cli::run); shared by the binary and the Python console script. server-feature only
     ├── config.rs              ← resolved Config struct passed through app via Arc
     ├── error.rs               ← AppError enum implementing IntoResponse
     ├── db/
@@ -411,6 +411,13 @@ package — so the core `terrana` crate and its CLI/server are unaffected by it.
   `terrana_core = { package = "terrana", path = "..", features = ["server"] }`. The
   `package = "terrana"` rename avoids colliding with the `#[pymodule] fn terrana` in
   `python/src/lib.rs`. The `[lib]` is `name = "terrana"`, `crate-type = ["cdylib"]`.
+- **Console command:** `pyproject.toml` declares `[project.scripts] terrana =
+  "terrana:_run_cli"`, so `pip install terrana` installs a `terrana` CLI identical to the
+  Rust binary (`terrana serve <file> …`). `_run_cli` (in `python/src/lib.rs`) reads
+  `sys.argv`, resets `SIGINT → SIG_DFL` so Ctrl-C terminates like the binary (Python's
+  handler is otherwise swallowed while the GIL is released), and calls
+  `terrana_core::cli::run`. Add new subcommands/flags in `src/cli.rs` only — both front
+  ends inherit them.
 - **Build backend:** `pyproject.toml` uses `maturin`. `pyo3` is built with the
   `extension-module` + `abi3-py39` features → one stable-ABI wheel covers CPython 3.9+.
   Same bundled DuckDB as the engine, so a cold build compiles the DuckDB amalgamation

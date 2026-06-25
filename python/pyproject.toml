@@ -15,3 +15,9 @@ classifiers = [
 ]
 # Version is read from python/Cargo.toml (kept in lockstep with the Rust crate).
 dynamic = ["version"]
+
+# `pip install terrana` installs a `terrana` console command that runs the same CLI
+# as the Rust binary (`terrana serve <file> …`). The launcher imports the compiled
+# extension module and calls `_run_cli`, which reads sys.argv and serves.
+[project.scripts]
+terrana = "terrana:_run_cli"

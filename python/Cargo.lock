@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "terrana"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "terrana-py"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "duckdb",
  "geo-types",
