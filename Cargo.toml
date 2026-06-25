@@ -22,7 +22,6 @@ exclude = [
     "CLAUDE.md",
     ".github/",
     "testdata/*.py",
-    "TERRANA_V02_PLAN.md",
     "python/",
 ]
 
