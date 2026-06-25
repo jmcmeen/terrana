@@ -81,7 +81,10 @@ tempfile = "3"
 
 ## Project Structure
 
-Every file that should exist is listed here. Do not create files outside this tree.
+The core engine and HTTP server live under `src/`, mapped below. The repo also contains
+the `python/` bindings crate (shown at the end of the tree), an integration `tests/` dir,
+CI under `.github/workflows/`, and packaging files (`Dockerfile`, `Makefile`, etc.) — those
+are not exhaustively listed here. Keep new engine/server code within the `src/` layout below.
 
 ```
 terrana/
@@ -122,6 +125,12 @@ terrana/
         ├── json.rs            ← JSON rows response
         ├── csv.rs             ← CSV response using csv crate
         └── geojson.rs         ← GeoJSON FeatureCollection response
+
+python/                        ← Python bindings (terrana-py) — separate deploy target, NOT in the main crate
+├── Cargo.toml                 ← terrana-py crate; depends on the root crate as `terrana_core` (features = ["server"])
+├── pyproject.toml             ← maturin build backend + PyPI metadata; version tracks python/Cargo.toml
+├── src/lib.rs                 ← #[pymodule] terrana — pyo3 wrapper over the engine library
+└── tests/                     ← pytest suite, run against the built wheel
 ```
 
 ---
@@ -381,8 +390,38 @@ Do not implement any of the following. If a request seems to push toward them, f
 - No write support (read-only; no append, no insert)
 - No CRS conversion (WGS 84 only, no `proj` dependency)
 - No H3 hexagonal indexing (R-tree only for MVP)
-- No Python/R bindings (no `pyo3`)
+- No R bindings
 - No map rendering
+
+**Python bindings are an exception and already exist** — they live in the separate
+`python/` crate (`terrana-py`, a `pyo3`/`maturin` wheel) which wraps the engine as a
+library. They are a distinct deploy target, *not* part of the main `terrana` crate (the
+root `Cargo.toml` excludes `python/`). The "no `pyo3` in the core" rule still holds: keep
+binding code in `python/`, not in `src/`. See the Python Bindings section below.
+
+---
+
+## Python Bindings (`python/`)
+
+A separate crate, `terrana-py`, exposes the engine to Python as an `abi3` wheel. It is an
+independent deploy target — not a workspace member, and excluded from the root crate's
+package — so the core `terrana` crate and its CLI/server are unaffected by it.
+
+- **How it wraps the engine:** `python/Cargo.toml` depends on the root crate via
+  `terrana_core = { package = "terrana", path = "..", features = ["server"] }`. The
+  `package = "terrana"` rename avoids colliding with the `#[pymodule] fn terrana` in
+  `python/src/lib.rs`. The `[lib]` is `name = "terrana"`, `crate-type = ["cdylib"]`.
+- **Build backend:** `pyproject.toml` uses `maturin`. `pyo3` is built with the
+  `extension-module` + `abi3-py39` features → one stable-ABI wheel covers CPython 3.9+.
+  Same bundled DuckDB as the engine, so a cold build compiles the DuckDB amalgamation
+  (~15–20 min) — `python/target` is cached in CI.
+- **Local dev:** from `python/`, `maturin develop` builds into an active venv; tests are
+  `pytest tests/`. The native CI job ([.github/workflows/ci.yml](.github/workflows/ci.yml)
+  `python` job) does exactly this.
+- **Release / wheels:** [.github/workflows/python-publish.yml](.github/workflows/python-publish.yml)
+  builds wheels via `maturin-action` and publishes to PyPI on `v*` tags. Linux wheels build
+  inside a **manylinux 2_28** container (not `auto`/2014) — bundled DuckDB needs a newer C++
+  toolchain than CentOS-7-based manylinux2014 provides.
 
 ---
 
