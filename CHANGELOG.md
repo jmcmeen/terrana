@@ -5,6 +5,23 @@ All notable changes to Terrana will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-25
+
+### Added
+
+- **Library crate.** Terrana is now a `lib + bin` crate. `src/lib.rs` exposes a public API so the engine can be used in-process without the HTTP server: `ingest_file`, `detect_lat_lon`, `query`, `AppError`, and the geodesic `geometry` modules.
+- `db::loader::ingest_file` — load a file end to end (stage → detect lat/lon → promote → build the R-tree index) in one call, returning `IngestInfo { lat_col, lon_col, row_count }`.
+- `server` Cargo feature, enabled by default. Depend on Terrana with `default-features = false` to get the pure library without pulling in axum / tokio / tower.
+- **Python bindings** (`terrana` on PyPI, built with PyO3 + maturin). A single stable-ABI (`abi3`) wheel for CPython 3.9+ exposing both an in-process library mode — `load_csv`/`load_parquet`/`load_geojson`, `query_radius`/`query_bbox`/`query_nearest`, `geodesic_distance`/`geodesic_area`, `convex_hull`, `buffer` — and an embedded HTTP server managed from Python (`serve_background`/`serve`/`shutdown`, context manager). The tokio runtime runs entirely in a Rust thread, off the GIL.
+
+### Changed
+
+- Geodesic math moved out of the Axum handlers into pure `terrana::geometry` modules (`area`, `buffer`, `hull`, `dissolve`, `simplify`, `measure`). Handlers are now thin glue; HTTP responses are unchanged.
+
+### Fixed
+
+- `POST /geometry/buffer` reported the area as ~510,000,000 km² (the Earth's entire surface): the ring was wound clockwise, so `geodesic_area_unsigned` measured its complement. The ring is now generated counter-clockwise (GeoJSON right-hand rule), so the reported area is the buffer disk as expected.
+
 ## [0.1.1] - 2026-06-02
 
 ### Fixed

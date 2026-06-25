@@ -1,8 +1,11 @@
 //! The application error type. Every handler returns `Result<_, AppError>`, and
 //! `AppError` maps to an HTTP status + JSON body via its `IntoResponse` impl.
 
+#[cfg(feature = "server")]
 use axum::http::StatusCode;
+#[cfg(feature = "server")]
 use axum::response::{IntoResponse, Response};
+#[cfg(feature = "server")]
 use serde_json::json;
 
 #[derive(thiserror::Error, Debug)]
@@ -21,6 +24,7 @@ pub enum AppError {
     Internal(#[from] anyhow::Error),
 }
 
+#[cfg(feature = "server")]
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
