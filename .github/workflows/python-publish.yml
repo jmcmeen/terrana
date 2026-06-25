@@ -1,0 +1,97 @@
+name: Publish Python
+
+# Builds the abi3 `terrana` wheels + sdist and publishes them to PyPI. Triggered by
+# the same `v*` tag that drives the binary + crates.io publish (see release.yml),
+# so one tag releases both registries from the same version.
+#
+# One-time setup (no token/secret needed — PyPI trusted publishing via OIDC):
+#   PyPI project settings -> add a trusted publisher:
+#     owner: <your gh org/user>, repository: terrana,
+#     workflow: python-publish.yml, environment: pypi
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: Wheel (${{ matrix.platform.os }} / ${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # abi3 -> one wheel per platform covers CPython 3.9+. (aarch64-linux can be
+          # added later; it cross-compiles the bundled DuckDB C++ and needs extra care.)
+          - { os: ubuntu-latest,  target: x86_64,  manylinux: auto }
+          - { os: macos-latest,   target: aarch64, manylinux: "" }
+          - { os: macos-13,       target: x86_64,  manylinux: "" }
+          - { os: windows-latest, target: x64,     manylinux: "" }
+    steps:
+      - uses: actions/checkout@v4
+
+      # Wheel version comes from the tag (vX.Y.Z -> X.Y.Z); the committed
+      # python/Cargo.toml version is only a dev placeholder. Rewrites just the
+      # line-anchored [package] version, not dependency `version = ` keys.
+      - name: Set wheel version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          perl -0pi -e "s/^version = .*/version = \"$VERSION\"/m" python/Cargo.toml
+          grep -m1 '^version' python/Cargo.toml
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          working-directory: python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: python/dist/*.whl
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set sdist version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          perl -0pi -e "s/^version = .*/version = \"$VERSION\"/m" python/Cargo.toml
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: python/dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi # must match the trusted-publisher config on PyPI
+    permissions:
+      id-token: write # OIDC token for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

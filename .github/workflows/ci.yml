@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 env:
   CARGO_TERM_COLOR: always
@@ -67,3 +67,29 @@ jobs:
         with:
           name: terrana-${{ matrix.os }}
           path: target/release/terrana
+
+  python:
+    name: Python bindings
+    runs-on: ubuntu-latest
+    # The cold run compiles bundled DuckDB for the python crate (~15–20 min); the
+    # cache below makes subsequent runs fast. 40 min is a safe backstop, not a target.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Cache python/target so DuckDB is compiled once, not on every run.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: python
+      - uses: astral-sh/setup-uv@v5
+      # Single shell so the activated venv persists across build + test. Needs
+      # network (DuckDB fetches its `spatial` extension on first use — CI has it).
+      - name: Build extension and run tests
+        working-directory: python
+        run: |
+          uv venv --python 3.13
+          source .venv/bin/activate
+          uv pip install maturin pytest pytest-timeout
+          maturin develop
+          # --timeout caps any single test so a stuck server test can't hang the job.
+          pytest tests/ -v --timeout=120

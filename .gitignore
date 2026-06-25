@@ -3,4 +3,5 @@
 # reproducible builds. (Library crates typically gitignore it instead.)
 testdata/bench_*.csv
 testdata/bench_*.csv.gz
-/.claude
+.claude/settings.local.json
+/python/tests/__pycache__

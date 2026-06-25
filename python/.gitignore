@@ -1,0 +1,9 @@
+# Rust build artifacts
+/target
+
+# uv / virtualenv
+/.venv
+
+# maturin / build outputs
+*.so
+/dist

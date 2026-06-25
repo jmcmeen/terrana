@@ -2,25 +2,23 @@
 //!
 //! Entry point: parse the CLI, ingest the source file into DuckDB, build the spatial
 //! index, and serve the REST API with axum. With `--watch`, a background thread
-//! re-ingests the file and atomically swaps the served [`server::Snapshot`] on change.
+//! re-ingests the file and atomically swaps the served `Snapshot` on change.
+//!
+//! The reusable pieces (ingestion, queries, geodesic geometry, the axum router)
+//! live in the [`terrana`] library crate; this binary is a thin CLI shell over them.
 
 mod cli;
-mod config;
-mod db;
-mod error;
-mod handlers;
-mod output;
-mod server;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::Config;
 use duckdb::Connection;
-use error::AppError;
-use server::{AppState, BBox, ColumnMeta, Snapshot, TableSchema};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+use terrana::config::Config;
+use terrana::db;
+use terrana::error::AppError;
+use terrana::server::{self, AppState, Snapshot};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -110,13 +108,12 @@ async fn main() -> anyhow::Result<()> {
                 start_time: Instant::now(),
             };
 
-            let app = server::build_router(state);
-
             let addr = format!("{}:{}", bind, port);
             info!("listening on {}", addr);
 
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
-            axum::serve(listener, app).await?;
+            // serve() owns the axum/tokio glue (shared with the library/Python path).
+            // A never-resolving shutdown preserves the binary's run-until-killed behaviour.
+            server::serve(state, addr, std::future::pending::<()>()).await?;
         }
     }
 
@@ -164,60 +161,15 @@ fn build_snapshot(
     let index_build_ms = start_build.elapsed().as_millis();
     info!(ms = %index_build_ms, "spatial index built");
 
-    let (spatial_bbox, spatial_count) = compute_extent(conn, &lat_col, &lon_col)?;
-
-    let schema = TableSchema {
-        source: source.to_string(),
-        row_count: staged.row_count,
-        lat_col,
-        lon_col,
-        columns: staged
-            .col_names
-            .iter()
-            .zip(staged.col_types.iter())
-            .map(|(name, dtype)| ColumnMeta {
-                name: name.clone(),
-                dtype: dtype.clone(),
-            })
-            .collect(),
-    };
-
-    Ok(Snapshot {
-        schema,
+    // Assemble the snapshot (extent + schema) via the shared library helper.
+    server::build_snapshot(
+        conn,
+        source,
+        &lat_col,
+        &lon_col,
+        staged.row_count,
         index_build_ms,
-        spatial_bbox,
-        spatial_count,
-    })
-}
-
-/// Compute the lat/lon bounding box and the count of spatially-valid rows.
-fn compute_extent(
-    conn: &Connection,
-    lat_col: &str,
-    lon_col: &str,
-) -> Result<(Option<BBox>, i64), AppError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT MIN(\"{lat}\"), MIN(\"{lon}\"), MAX(\"{lat}\"), MAX(\"{lon}\"), COUNT(*) FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
-        lat = lat_col,
-        lon = lon_col,
-    ))?;
-    let result: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) =
-        stmt.query_row([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })?;
-    let bbox = match result {
-        (Some(min_lat), Some(min_lon), Some(max_lat), Some(max_lon), _) => {
-            Some((min_lat, min_lon, max_lat, max_lon))
-        }
-        _ => None,
-    };
-    Ok((bbox, result.4))
+    )
 }
 
 /// Spawn a background thread that watches `abs_path` and re-ingests it on change,

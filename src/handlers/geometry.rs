@@ -1,19 +1,20 @@
 //! `POST /geometry/*` endpoints — area, convex-hull, centroid, buffer, dissolve,
-//! simplify, distance, and bounds. All area/distance/buffer math is geodesic
-//! (Karney / WGS 84 via the `geo` crate), never planar.
+//! simplify, distance, and bounds.
+//!
+//! These handlers are thin Axum glue: they parse the JSON body into geo-types,
+//! call the relevant pure function in [`crate::geometry`], and shape the JSON
+//! response. All geodesic math lives in `crate::geometry`, never here.
 
 use crate::db;
 use crate::db::query::MAX_RESULT_LIMIT;
 use crate::error::AppError;
+use crate::geometry;
 use crate::server::AppState;
 use axum::extract::State;
 use axum::Json;
-use geo::{
-    Bearing, BoundingRect, Centroid, ConvexHull, Destination, Distance, Geodesic, GeodesicArea,
-    Simplify, SimplifyVw,
-};
-use geo_types::{LineString, Point, Polygon};
+use geo_types::{Geometry, Point, Polygon};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::convert::TryInto;
 
 pub async fn area(
@@ -21,22 +22,8 @@ pub async fn area(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let polygons = extract_polygons_from_body(&body)?;
-
-    let mut total_area_m2 = 0.0_f64;
-    let mut total_perimeter_m = 0.0_f64;
-
-    for poly in &polygons {
-        total_area_m2 += poly.geodesic_area_unsigned();
-        total_perimeter_m += poly.geodesic_perimeter();
-    }
-
-    Ok(Json(json!({
-        "area_m2": total_area_m2,
-        "area_km2": total_area_m2 / 1_000_000.0,
-        "area_ha": total_area_m2 / 10_000.0,
-        "area_acres": total_area_m2 / 4_046.8564224,
-        "perimeter_m": total_perimeter_m,
-    })))
+    let result = geometry::area::compute_area(&polygons);
+    Ok(Json(to_value(&result)?))
 }
 
 pub async fn convex_hull(
@@ -44,21 +31,7 @@ pub async fn convex_hull(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let points = if let Some(query) = body.get("query") {
-        let bbox = query
-            .get("bbox")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| AppError::BadRequest("Expected query.bbox array".into()))?;
-        if bbox.len() != 4 {
-            return Err(AppError::BadRequest("bbox must have 4 values".into()));
-        }
-        let mut coords = [0.0_f64; 4];
-        for (i, coord) in coords.iter_mut().enumerate() {
-            *coord = bbox[i]
-                .as_f64()
-                .ok_or_else(|| AppError::BadRequest("bbox values must be numeric".into()))?;
-        }
-        let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
-
+        let (min_lat, min_lon, max_lat, max_lon) = parse_bbox(query)?;
         let snap = state.snapshot();
         let raw_pts = db::query::query_points_in_bbox(
             &state.db,
@@ -83,23 +56,18 @@ pub async fn convex_hull(
         ));
     }
 
-    let multi_point = geo_types::MultiPoint::from(points.clone());
-    let hull = multi_point.convex_hull();
-
-    let area_m2 = hull.geodesic_area_unsigned();
-    let perimeter_m = hull.geodesic_perimeter();
-
-    let hull_geojson: geojson::Geometry = (&hull).into();
+    let result = geometry::hull::compute_convex_hull(&points);
+    let hull_geojson: geojson::Geometry = (&result.hull).into();
 
     Ok(Json(json!({
         "type": "Feature",
         "geometry": serde_json::to_value(&hull_geojson).unwrap_or(json!(null)),
         "properties": {
-            "area_m2": area_m2,
-            "area_km2": area_m2 / 1_000_000.0,
-            "area_ha": area_m2 / 10_000.0,
-            "perimeter_m": perimeter_m,
-            "point_count": points.len(),
+            "area_m2": result.area_m2,
+            "area_km2": result.area_km2,
+            "area_ha": result.area_ha,
+            "perimeter_m": result.perimeter_m,
+            "point_count": result.point_count,
         }
     })))
 }
@@ -108,25 +76,8 @@ pub async fn centroid(
     State(_state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let geojson: geojson::GeoJson = body
-        .to_string()
-        .parse()
-        .map_err(|e| AppError::BadRequest(format!("Invalid GeoJSON: {}", e)))?;
-
-    let geom = match geojson {
-        geojson::GeoJson::Geometry(g) => g,
-        geojson::GeoJson::Feature(f) => f
-            .geometry
-            .ok_or_else(|| AppError::BadRequest("Feature has no geometry".into()))?,
-        _ => return Err(AppError::BadRequest("Expected a single geometry".into())),
-    };
-
-    let geo_geom: geo_types::Geometry<f64> = geom
-        .try_into()
-        .map_err(|e| AppError::Geometry(format!("{}", e)))?;
-
-    let c = geo_geom
-        .centroid()
+    let geo_geom = single_geometry_from_body(&body)?;
+    let c = geometry::measure::centroid(&geo_geom)
         .ok_or_else(|| AppError::Geometry("Could not compute centroid".into()))?;
 
     Ok(Json(json!({
@@ -158,39 +109,20 @@ pub async fn buffer(
         _ => distance,
     };
 
-    let geojson: geojson::Geometry = serde_json::from_value(geom_val.clone())
-        .map_err(|e| AppError::BadRequest(format!("Invalid geometry: {}", e)))?;
-    let geo_geom: geo_types::Geometry<f64> = geojson
-        .try_into()
-        .map_err(|e| AppError::Geometry(format!("{}", e)))?;
-
-    let center = geo_geom
-        .centroid()
+    let geo_geom = geo_geometry_from_value(geom_val)?;
+    let center = geometry::measure::centroid(&geo_geom)
         .ok_or_else(|| AppError::Geometry("Cannot compute centroid for buffer".into()))?;
 
-    let mut coords = Vec::with_capacity(segments + 1);
-    for i in 0..segments {
-        let bearing = (i as f64) * 360.0 / (segments as f64);
-        let dest = Geodesic.destination(center, bearing, distance_m);
-        coords.push(geo_types::Coord {
-            x: dest.x(),
-            y: dest.y(),
-        });
-    }
-    coords.push(coords[0]);
-
-    let ring = LineString::from(coords);
-    let poly = Polygon::new(ring, vec![]);
-
-    let area_m2 = poly.geodesic_area_unsigned();
+    let poly = geometry::buffer::compute_buffer(center, distance_m, segments);
+    let area = geometry::area::compute_area(std::slice::from_ref(&poly));
     let poly_geojson: geojson::Geometry = (&poly).into();
 
     Ok(Json(json!({
         "type": "Feature",
         "geometry": serde_json::to_value(&poly_geojson).unwrap_or(json!(null)),
         "properties": {
-            "area_m2": area_m2,
-            "area_km2": area_m2 / 1_000_000.0,
+            "area_m2": area.area_m2,
+            "area_km2": area.area_km2,
             "distance_m": distance_m,
             "segments": segments,
         }
@@ -214,19 +146,8 @@ pub async fn dissolve(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let points_with_data = if let Some(query) = body.get("query") {
-        let bbox = query
-            .get("bbox")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| AppError::BadRequest("Expected query.bbox".into()))?;
-        let mut coords = [0.0_f64; 4];
-        for (i, coord) in coords.iter_mut().enumerate() {
-            *coord = bbox[i]
-                .as_f64()
-                .ok_or_else(|| AppError::BadRequest("bbox values must be numeric".into()))?;
-        }
-        let (min_lat, min_lon, max_lat, max_lon) = (coords[0], coords[1], coords[2], coords[3]);
-
+    let rows = if let Some(query) = body.get("query") {
+        let (min_lat, min_lon, max_lat, max_lon) = parse_bbox(query)?;
         db::query::query_rows_in_bbox(
             &state.db,
             min_lat,
@@ -252,10 +173,9 @@ pub async fn dissolve(
     let snap = state.snapshot();
     let lat_col = &snap.schema.lat_col;
     let lon_col = &snap.schema.lon_col;
-    let mut groups: std::collections::HashMap<String, Vec<Point<f64>>> =
-        std::collections::HashMap::new();
+    let mut groups: HashMap<String, Vec<Point<f64>>> = HashMap::new();
 
-    for row in &points_with_data {
+    for row in &rows {
         let key = row
             .get(by)
             .map(|v| match v {
@@ -272,32 +192,7 @@ pub async fn dissolve(
         }
     }
 
-    let mut features = Vec::new();
-    for (key, pts) in &groups {
-        if pts.len() < 3 {
-            continue;
-        }
-        let multi_point = geo_types::MultiPoint::from(pts.clone());
-        let hull = multi_point.convex_hull();
-        let hull_geojson: geojson::Geometry = (&hull).into();
-
-        let mut props = serde_json::Map::new();
-        props.insert(by.to_string(), json!(key));
-        if include_count {
-            props.insert("count".to_string(), json!(pts.len()));
-        }
-        if include_area {
-            let area_m2 = hull.geodesic_area_unsigned();
-            props.insert("area_m2".to_string(), json!(area_m2));
-            props.insert("area_km2".to_string(), json!(area_m2 / 1_000_000.0));
-        }
-
-        features.push(json!({
-            "type": "Feature",
-            "geometry": serde_json::to_value(&hull_geojson).unwrap_or(json!(null)),
-            "properties": props,
-        }));
-    }
+    let features = geometry::dissolve::dissolve_by(&groups, by, include_area, include_count);
 
     Ok(Json(json!({
         "type": "FeatureCollection",
@@ -321,37 +216,8 @@ pub async fn simplify(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let geojson: geojson::Geometry = serde_json::from_value(geom_val.clone())
-        .map_err(|e| AppError::BadRequest(format!("Invalid geometry: {}", e)))?;
-    let geo_geom: geo_types::Geometry<f64> = geojson
-        .try_into()
-        .map_err(|e| AppError::Geometry(format!("{}", e)))?;
-
-    let simplified = match geo_geom {
-        geo_types::Geometry::Polygon(p) => {
-            if preserve_topology {
-                geo_types::Geometry::Polygon(p.simplify_vw(tolerance))
-            } else {
-                geo_types::Geometry::Polygon(p.simplify(tolerance))
-            }
-        }
-        geo_types::Geometry::MultiPolygon(mp) => {
-            if preserve_topology {
-                geo_types::Geometry::MultiPolygon(mp.simplify_vw(tolerance))
-            } else {
-                geo_types::Geometry::MultiPolygon(mp.simplify(tolerance))
-            }
-        }
-        geo_types::Geometry::LineString(ls) => {
-            if preserve_topology {
-                geo_types::Geometry::LineString(ls.simplify_vw(tolerance))
-            } else {
-                geo_types::Geometry::LineString(ls.simplify(tolerance))
-            }
-        }
-        other => other,
-    };
-
+    let geo_geom = geo_geometry_from_value(geom_val)?;
+    let simplified = geometry::simplify::simplify_geometry(geo_geom, tolerance, preserve_topology);
     let result_geojson: geojson::Geometry = (&simplified).into();
 
     Ok(Json(json!({
@@ -375,21 +241,55 @@ pub async fn distance(
     let from_pt = extract_point(from_val, "from")?;
     let to_pt = extract_point(to_val, "to")?;
 
-    let distance_m = Geodesic.distance(from_pt, to_pt);
-    let bearing = Geodesic.bearing(from_pt, to_pt);
-
-    Ok(Json(json!({
-        "distance_m": distance_m,
-        "distance_km": distance_m / 1000.0,
-        "distance_mi": distance_m / 1609.344,
-        "bearing_deg": bearing,
-    })))
+    let result = geometry::measure::geodesic_distance(from_pt, to_pt);
+    Ok(Json(to_value(&result)?))
 }
 
 pub async fn bounds(
     State(_state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
+    let geo_geom = single_geometry_from_body(&body)?;
+    let result = geometry::measure::bounding_box(&geo_geom)
+        .ok_or_else(|| AppError::Geometry("Could not compute bounding rect".into()))?;
+    let envelope_geojson: geojson::Geometry = (&result.envelope).into();
+
+    Ok(Json(json!({
+        "bbox": result.bbox,
+        "envelope": serde_json::to_value(&envelope_geojson).unwrap_or(json!(null)),
+        "width_km": result.width_km,
+        "height_km": result.height_km,
+        "area_km2": result.area_km2,
+    })))
+}
+
+// --- Helpers ---
+
+/// Serialize a pure result struct into a JSON value, mapping failures to a 500.
+fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, AppError> {
+    serde_json::to_value(value).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))
+}
+
+/// Parse a `{ "bbox": [min_lat, min_lon, max_lat, max_lon] }` query object.
+fn parse_bbox(query: &Value) -> Result<(f64, f64, f64, f64), AppError> {
+    let bbox = query
+        .get("bbox")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| AppError::BadRequest("Expected query.bbox array".into()))?;
+    if bbox.len() != 4 {
+        return Err(AppError::BadRequest("bbox must have 4 values".into()));
+    }
+    let mut coords = [0.0_f64; 4];
+    for (i, coord) in coords.iter_mut().enumerate() {
+        *coord = bbox[i]
+            .as_f64()
+            .ok_or_else(|| AppError::BadRequest("bbox values must be numeric".into()))?;
+    }
+    Ok((coords[0], coords[1], coords[2], coords[3]))
+}
+
+/// Parse a body that is a single GeoJSON geometry or a Feature wrapping one.
+fn single_geometry_from_body(body: &Value) -> Result<Geometry<f64>, AppError> {
     let geojson: geojson::GeoJson = body
         .to_string()
         .parse()
@@ -403,45 +303,18 @@ pub async fn bounds(
         _ => return Err(AppError::BadRequest("Expected a single geometry".into())),
     };
 
-    let geo_geom: geo_types::Geometry<f64> = geom
-        .try_into()
-        .map_err(|e| AppError::Geometry(format!("{}", e)))?;
-
-    let rect = geo_geom
-        .bounding_rect()
-        .ok_or_else(|| AppError::Geometry("Could not compute bounding rect".into()))?;
-
-    let min_lat = rect.min().y;
-    let min_lon = rect.min().x;
-    let max_lat = rect.max().y;
-    let max_lon = rect.max().x;
-
-    let width_m = Geodesic.distance(Point::new(min_lon, min_lat), Point::new(max_lon, min_lat));
-    let height_m = Geodesic.distance(Point::new(min_lon, min_lat), Point::new(min_lon, max_lat));
-
-    let envelope_poly = Polygon::new(
-        LineString::from(vec![
-            (min_lon, min_lat),
-            (max_lon, min_lat),
-            (max_lon, max_lat),
-            (min_lon, max_lat),
-            (min_lon, min_lat),
-        ]),
-        vec![],
-    );
-    let envelope_geojson: geojson::Geometry = (&envelope_poly).into();
-    let area_m2 = envelope_poly.geodesic_area_unsigned();
-
-    Ok(Json(json!({
-        "bbox": [min_lat, min_lon, max_lat, max_lon],
-        "envelope": serde_json::to_value(&envelope_geojson).unwrap_or(json!(null)),
-        "width_km": width_m / 1000.0,
-        "height_km": height_m / 1000.0,
-        "area_km2": area_m2 / 1_000_000.0,
-    })))
+    geom.try_into()
+        .map_err(|e| AppError::Geometry(format!("{}", e)))
 }
 
-// --- Helpers ---
+/// Parse a single GeoJSON geometry from a JSON value.
+fn geo_geometry_from_value(val: &Value) -> Result<Geometry<f64>, AppError> {
+    let geojson: geojson::Geometry = serde_json::from_value(val.clone())
+        .map_err(|e| AppError::BadRequest(format!("Invalid geometry: {}", e)))?;
+    geojson
+        .try_into()
+        .map_err(|e| AppError::Geometry(format!("{}", e)))
+}
 
 fn extract_polygons_from_body(body: &Value) -> Result<Vec<Polygon<f64>>, AppError> {
     let geojson_val = if let Some(geom) = body.get("geometry") {
@@ -480,14 +353,14 @@ fn collect_polygons(
     geom: &geojson::Geometry,
     polygons: &mut Vec<Polygon<f64>>,
 ) -> Result<(), AppError> {
-    let geo_geom: geo_types::Geometry<f64> = geom
+    let geo_geom: Geometry<f64> = geom
         .clone()
         .try_into()
         .map_err(|e| AppError::Geometry(format!("{}", e)))?;
 
     match geo_geom {
-        geo_types::Geometry::Polygon(p) => polygons.push(p),
-        geo_types::Geometry::MultiPolygon(mp) => polygons.extend(mp.0),
+        Geometry::Polygon(p) => polygons.push(p),
+        Geometry::MultiPolygon(mp) => polygons.extend(mp.0),
         _ => {
             return Err(AppError::BadRequest(
                 "Expected Polygon or MultiPolygon".into(),
@@ -500,12 +373,12 @@ fn collect_polygons(
 fn extract_point(val: &Value, label: &str) -> Result<Point<f64>, AppError> {
     let geojson: geojson::Geometry = serde_json::from_value(val.clone())
         .map_err(|e| AppError::BadRequest(format!("Invalid '{}' geometry: {}", label, e)))?;
-    let geo_geom: geo_types::Geometry<f64> = geojson
+    let geo_geom: Geometry<f64> = geojson
         .try_into()
         .map_err(|e| AppError::Geometry(format!("{}", e)))?;
 
     match geo_geom {
-        geo_types::Geometry::Point(p) => Ok(p),
+        Geometry::Point(p) => Ok(p),
         _ => Err(AppError::BadRequest(format!("'{}' must be a Point", label))),
     }
 }
@@ -521,9 +394,7 @@ fn extract_points_from_body(body: &Value) -> Result<Vec<Point<f64>>, AppError> {
         geojson::GeoJson::FeatureCollection(fc) => {
             for f in fc.features {
                 if let Some(g) = f.geometry {
-                    if let Ok(geo_types::Geometry::Point(p)) =
-                        TryInto::<geo_types::Geometry<f64>>::try_into(g)
-                    {
+                    if let Ok(Geometry::Point(p)) = TryInto::<Geometry<f64>>::try_into(g) {
                         points.push(p);
                     }
                 }
@@ -549,7 +420,7 @@ mod tests {
         });
         let polys = extract_polygons_from_body(&body).unwrap();
         assert_eq!(polys.len(), 1);
-        let area_km2 = polys[0].geodesic_area_unsigned() / 1_000_000.0;
+        let area_km2 = geometry::area::compute_area(&polys).area_km2;
         assert!(
             (12_000.0..12_700.0).contains(&area_km2),
             "expected ~12,308 km², got {area_km2}"
