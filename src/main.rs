@@ -2,26 +2,23 @@
 //!
 //! Entry point: parse the CLI, ingest the source file into DuckDB, build the spatial
 //! index, and serve the REST API with axum. With `--watch`, a background thread
-//! re-ingests the file and atomically swaps the served [`server::Snapshot`] on change.
+//! re-ingests the file and atomically swaps the served `Snapshot` on change.
+//!
+//! The reusable pieces (ingestion, queries, geodesic geometry, the axum router)
+//! live in the [`terrana`] library crate; this binary is a thin CLI shell over them.
 
 mod cli;
-mod config;
-mod db;
-mod error;
-mod geometry;
-mod handlers;
-mod output;
-mod server;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::Config;
 use duckdb::Connection;
-use error::AppError;
-use server::{AppState, BBox, ColumnMeta, Snapshot, TableSchema};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+use terrana::config::Config;
+use terrana::db;
+use terrana::error::AppError;
+use terrana::server::{self, AppState, BBox, ColumnMeta, Snapshot, TableSchema};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 

@@ -277,6 +277,52 @@ pub fn add_spatial_index(
     Ok(())
 }
 
+/// The outcome of [`ingest_file`]: the resolved lat/lon column names and the
+/// number of rows loaded.
+#[derive(Debug, Clone)]
+pub struct IngestInfo {
+    pub lat_col: String,
+    pub lon_col: String,
+    pub row_count: i64,
+}
+
+/// Ingest a file end to end: stage it, auto-detect (or validate) the lat & lon
+/// columns, promote it to the live `raw_data` table + `data` view, and build the
+/// spatial R-tree index.
+///
+/// This is the library entry point for loading a dataset without the HTTP server.
+/// It is failure-atomic in the same way `--watch` reloads are: if column detection
+/// fails the staged data is discarded and any previously-loaded dataset is left
+/// intact.
+pub fn ingest_file(
+    conn: &Connection,
+    path: &Path,
+    table: Option<&str>,
+    lat_override: Option<&str>,
+    lon_override: Option<&str>,
+) -> Result<IngestInfo, AppError> {
+    stage_file(conn, path, table)?;
+
+    let staged = crate::db::get_table_info_relation(conn, "raw_data_stage")?;
+    let (lat_col, lon_col) =
+        match detect_lat_lon(&staged.col_names, lat_override, lon_override) {
+            Ok(cols) => cols,
+            Err(e) => {
+                let _ = discard_stage(conn);
+                return Err(e);
+            }
+        };
+
+    promote_stage(conn)?;
+    add_spatial_index(conn, &lat_col, &lon_col)?;
+
+    Ok(IngestInfo {
+        lat_col,
+        lon_col,
+        row_count: staged.row_count,
+    })
+}
+
 fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -324,5 +370,22 @@ mod tests {
     #[test]
     fn escape_doubles_single_quotes() {
         assert_eq!(escape_sql_string("a'b"), "a''b");
+    }
+
+    #[test]
+    #[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+    fn ingest_file_loads_and_detects_columns() {
+        let conn = crate::db::create_connection().unwrap();
+        let info = ingest_file(
+            &conn,
+            Path::new("testdata/observations.csv"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(info.lat_col, "latitude");
+        assert_eq!(info.lon_col, "longitude");
+        assert_eq!(info.row_count, 20);
     }
 }

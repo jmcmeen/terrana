@@ -1,6 +1,6 @@
 [package]
 name = "terrana"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 authors = ["John McMeen <johnmcmeen@gmail.com>"]
@@ -22,18 +22,31 @@ exclude = [
     "CLAUDE.md",
     ".github/",
     "testdata/*.py",
+    "TERRANA_V02_PLAN.md",
 ]
+
+[lib]
+name = "terrana"
+path = "src/lib.rs"
+crate-type = ["rlib"]
 
 [[bin]]
 name = "terrana"
 path = "src/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+# The HTTP server layer. Disable (`default-features = false`) to use Terrana as a
+# pure library without pulling in axum / tokio / tower.
+server = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-axum = "0.8"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tokio = { version = "1", features = ["full"], optional = true }
+axum = { version = "0.8", optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
 duckdb = { version = "1", features = ["bundled"] }
 geo = "0.33"
 geo-types = "0.7"

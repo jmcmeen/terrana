@@ -275,6 +275,29 @@ fn geometry_distance_between_points() {
 
 #[test]
 #[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn geometry_buffer_area_is_sane() {
+    let s = spawn(&[]);
+    let req = serde_json::json!({
+        "geometry": { "type": "Point", "coordinates": [-82.5, 36.5] },
+        "distance": 5, "unit": "km", "segments": 64
+    });
+    let out: serde_json::Value = ureq::post(s.url("/geometry/buffer"))
+        .send_json(req)
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    // A 5 km buffer is ~78 km². A clockwise-wound ring would report Earth's whole
+    // surface (~5.1e8 km²) — this guards against that regression.
+    let area_km2 = out["properties"]["area_km2"].as_f64().unwrap();
+    assert!(
+        (70.0..85.0).contains(&area_km2),
+        "expected ~78 km², got {area_km2}"
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn invalid_select_column_is_rejected() {
     let s = spawn(&[]);
     // A select column with illegal characters must be rejected, not executed.
