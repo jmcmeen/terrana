@@ -1,8 +1,11 @@
 # Terrana
 
 [![CI](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml/badge.svg)](https://github.com/jmcmeen/terrana/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/terrana.svg)](https://crates.io/crates/terrana)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![crates.io](https://img.shields.io/crates/v/terrana.svg?color=fc8d62)](https://crates.io/crates/terrana)
+[![docs.rs](https://img.shields.io/docsrs/terrana?color=e78ac3)](https://docs.rs/terrana)
+[![PyPI](https://img.shields.io/pypi/v/terrana.svg?color=4c8cb5)](https://pypi.org/project/terrana/)
+[![Python versions](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-66c2a5.svg)](https://pypi.org/project/terrana/)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8da0cb.svg)](#license)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20515989.svg)](https://doi.org/10.5281/zenodo.20515989)
 
 Zero-config spatial API server. Point it at a CSV, Parquet, or GeoJSON file containing lat/lon columns and immediately get a REST API with spatial queries and geometry operations — no database setup, no PostGIS, no infrastructure.
