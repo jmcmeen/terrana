@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# One publish per tag at a time, so a retry doesn't race an upload in progress.
+concurrency:
+  group: python-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   wheels:
     name: Wheel (${{ matrix.platform.os }} / ${{ matrix.platform.target }})
