@@ -87,7 +87,8 @@ uv run pytest tests/ -v      # library + server-mode tests
 Releases are automatic. The Rust crate, the binaries, and the Python wheel ship
 from a **single `vX.Y.Z` tag** and **share one version**:
 
-- Every merge to `main` that passes CI is released as the next **patch** version
+- A merge to `main` that passes CI is released as the next **patch** version
+  (merges that land while a release is running share the next one)
   ([`.github/workflows/release.yml`](.github/workflows/release.yml)). A bot commit
   on `main` moves the `[Unreleased]` changelog entries under the new version and
   sets it in `Cargo.toml`, `python/Cargo.toml`, both `Cargo.lock`s, and
