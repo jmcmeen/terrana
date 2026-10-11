@@ -425,7 +425,8 @@ package — so the core `terrana` crate and its CLI/server are unaffected by it.
 - **Local dev:** from `python/`, `maturin develop` builds into an active venv; tests are
   `pytest tests/`. The native CI job ([.github/workflows/ci.yml](.github/workflows/ci.yml)
   `python` job) does exactly this.
-- **Release / wheels:** a merge to `main` that passes CI is released as the next patch version by
+- **Release / wheels:** a merge to `main` that passes CI is released as the next patch version
+  (merges that land while a release is running share the next one) by
   [.github/workflows/release.yml](.github/workflows/release.yml) (see CONTRIBUTING.md);
   [.github/workflows/python-publish.yml](.github/workflows/python-publish.yml)
   builds wheels via `maturin-action` and publishes to PyPI on the release tag. Linux wheels build

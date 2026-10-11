@@ -27,8 +27,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  guard:
+    name: Require a release tag on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          # Run by hand on a branch, this would create a branch-named release.
+          if [ "$GITHUB_REF_TYPE" != tag ] || ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Publish only runs on a vX.Y.Z tag, not $GITHUB_REF_TYPE '$GITHUB_REF_NAME'."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME isn't on main; only release tags from main are published."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: guard
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -79,6 +98,7 @@ jobs:
 
   publish-crate:
     name: Publish to crates.io
+    needs: guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +134,7 @@ jobs:
 
   python:
     name: Start the PyPI publish
+    needs: guard
     # A hand-pushed tag already triggers python-publish.yml itself.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
