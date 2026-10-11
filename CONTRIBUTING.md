@@ -84,18 +84,25 @@ uv run pytest tests/ -v      # library + server-mode tests
 
 ## Releasing & versioning
 
-Releases are cut by the maintainer only. The Rust crate and the Python wheel ship
-from a **single `vX.Y.Z` tag** and **share one version**, so:
+Releases are automatic. The Rust crate, the binaries, and the Python wheel ship
+from a **single `vX.Y.Z` tag** and **share one version**:
 
-- **Any change to the Rust crate _or_ the Python bindings needs a version bump** in
-  [`Cargo.toml`](Cargo.toml) at release. crates.io versions are immutable and the
-  wheel version is taken from the tag, so the published version must equal the tag —
-  CI fails the publish if they differ. Follow [SemVer](https://semver.org).
-- Flow: bump `Cargo.toml` → land through `staging` → merge `staging → main` → push
-  `vX.Y.Z` on `main`; the tag publishes both registries.
+- Every merge to `main` that passes CI is released as the next **patch** version
+  ([`.github/workflows/release.yml`](.github/workflows/release.yml)). A bot commit
+  on `main` moves the `[Unreleased]` changelog entries under the new version and
+  sets it in `Cargo.toml`, `python/Cargo.toml`, both `Cargo.lock`s, and
+  `CITATION.cff` ([`.github/scripts/set_version.sh`](.github/scripts/set_version.sh));
+  that commit is tagged, and the entries become the GitHub release notes.
+- [`publish.yml`](.github/workflows/publish.yml) then attaches the binaries,
+  publishes to crates.io, and starts
+  [`python-publish.yml`](.github/workflows/python-publish.yml) for PyPI.
+- For a **minor or major** release, the maintainer runs the workflow by hand on
+  `main`: `gh workflow run release.yml -f bump=minor` (or `major`). Follow
+  [SemVer](https://semver.org).
+- Flow: `dev` → `staging` → `main`; the merge to `main` is the release.
 
-Contributors don't bump the version in a PR — just note user-facing changes in
-[`CHANGELOG.md`](CHANGELOG.md); the maintainer handles the bump and tag at release.
+Contributors don't touch version numbers — just note user-facing changes in
+[`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
 
 ## Geodesic rules
 

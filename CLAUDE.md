@@ -26,7 +26,7 @@ The binary is called `terrana`. The crate name is `terrana`.
 | Concern | Choice |
 |---|---|
 | Language | Rust (edition 2021) |
-| HTTP framework | `axum` 0.7 |
+| HTTP framework | `axum` 0.8 |
 | Async runtime | `tokio` (full features) |
 | Database engine | `duckdb` crate (bundled feature — no system DuckDB needed) |
 | Spatial index | DuckDB spatial extension (R-tree index) |
@@ -425,8 +425,10 @@ package — so the core `terrana` crate and its CLI/server are unaffected by it.
 - **Local dev:** from `python/`, `maturin develop` builds into an active venv; tests are
   `pytest tests/`. The native CI job ([.github/workflows/ci.yml](.github/workflows/ci.yml)
   `python` job) does exactly this.
-- **Release / wheels:** [.github/workflows/python-publish.yml](.github/workflows/python-publish.yml)
-  builds wheels via `maturin-action` and publishes to PyPI on `v*` tags. Linux wheels build
+- **Release / wheels:** every merge to `main` is released as the next patch version by
+  [.github/workflows/release.yml](.github/workflows/release.yml) (see CONTRIBUTING.md);
+  [.github/workflows/python-publish.yml](.github/workflows/python-publish.yml)
+  builds wheels via `maturin-action` and publishes to PyPI on the release tag. Linux wheels build
   inside a **manylinux 2_28** container (not `auto`/2014) — bundled DuckDB needs a newer C++
   toolchain than CentOS-7-based manylinux2014 provides.
 
