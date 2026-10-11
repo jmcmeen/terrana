@@ -5,6 +5,8 @@ All notable changes to Terrana will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.2.1] - 2026-06-25
 
 ### Added
@@ -92,3 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Column name validation for all user-supplied column names, group_by, agg, and select params
 - Fixed a SQL-injection vector in the `--table` argument for `.duckdb` sources: the table identifier is now validated and quoted before interpolation
 - Bounding-box query parameters are now range-validated (lat ∈ [-90, 90], lon ∈ [-180, 180], min ≤ max)
+
+[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jmcmeen/terrana/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/jmcmeen/terrana/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/jmcmeen/terrana/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/jmcmeen/terrana/releases/tag/v0.1.0

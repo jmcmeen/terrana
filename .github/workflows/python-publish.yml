@@ -1,8 +1,9 @@
 name: Publish Python
 
-# Builds the abi3 `terrana` wheels + sdist and publishes them to PyPI. Triggered by
-# the same `v*` tag that drives the binary + crates.io publish (see release.yml),
-# so one tag releases both registries from the same version.
+# Builds the abi3 `terrana` wheels + sdist and publishes them to PyPI, from the
+# same `v*` tag as the binary + crates.io publish: publish.yml starts it on that
+# tag (or a hand-pushed tag triggers it), so one tag releases both registries
+# from the same version.
 #
 # One-time setup (no token/secret needed — PyPI trusted publishing via OIDC):
 #   PyPI project settings -> add a trusted publisher:
@@ -16,6 +17,11 @@ on:
 
 permissions:
   contents: read
+
+# One publish per tag at a time, so a retry doesn't race an upload in progress.
+concurrency:
+  group: python-publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   wheels:
@@ -103,3 +109,4 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true # a retried release re-runs this

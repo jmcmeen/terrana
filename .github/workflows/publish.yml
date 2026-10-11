@@ -1,0 +1,125 @@
+name: Publish
+
+# Builds the release binaries, attaches them to the GitHub release, publishes
+# the crate to crates.io, and starts python-publish.yml for the PyPI wheels.
+#
+# release.yml creates the vX.Y.Z tag and GitHub release on every merge to main
+# and dispatches this workflow on that tag (a tag pushed by GITHUB_TOKEN doesn't
+# trigger tag-push workflows). Pushing a vX.Y.Z tag by hand also runs it. Safe
+# to re-run: binaries are re-uploaded and a version already on crates.io is
+# skipped.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# One publish per tag at a time: a retry or a hand-pushed tag waits for the run
+# already publishing that version instead of racing it.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: terrana
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: terrana
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: terrana
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../terrana-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terrana-${{ matrix.target }}
+          path: terrana-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Attach binaries to the release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Upload binaries
+        run: |
+          # release.yml has normally created it; a hand-pushed tag hasn't.
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" artifacts/*.tar.gz --clobber
+
+  publish-crate:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # crates.io publishes the version in Cargo.toml, not the tag — so guard that
+      # they agree before publishing (versions are immutable and can't be re-pushed).
+      - name: Verify Cargo.toml version matches the tag
+        run: |
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml=$CARGO_VERSION  tag=$TAG"
+          test "$CARGO_VERSION" = "$TAG" || {
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match tag $GITHUB_REF_NAME"; exit 1;
+          }
+      - name: Publish
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          published() {
+            curl -sf -A "terrana-release (github.com/jmcmeen/terrana)" \
+              "https://crates.io/api/v1/crates/terrana/$VERSION" > /dev/null
+          }
+          if published; then
+            echo "terrana $VERSION is already on crates.io; skipping."
+          elif ! cargo publish; then
+            # Another run may have published it first (crates.io takes only one).
+            sleep 20
+            published || exit 1
+            echo "terrana $VERSION was published by another run."
+          fi
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  python:
+    name: Start the PyPI publish
+    # A hand-pushed tag already triggers python-publish.yml itself.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: gh workflow run python-publish.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
