@@ -99,7 +99,7 @@ from a **single `vX.Y.Z` tag** and **share one version**:
 - For a **minor or major** release, the maintainer runs the workflow by hand on
   `main`: `gh workflow run release.yml -f bump=minor` (or `major`). Follow
   [SemVer](https://semver.org).
-- Flow: `dev` → `staging` → `main`; the merge to `main` is the release.
+- Flow: work on `dev`, open a PR into `main`; the merge to `main` is the release.
 
 Contributors don't touch version numbers — just note user-facing changes in
 [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
