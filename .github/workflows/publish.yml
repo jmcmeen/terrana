@@ -3,7 +3,7 @@ name: Publish
 # Builds the release binaries, attaches them to the GitHub release, publishes
 # the crate to crates.io, and starts python-publish.yml for the PyPI wheels.
 #
-# release.yml creates the vX.Y.Z tag and GitHub release on every merge to main
+# release.yml creates the vX.Y.Z tag and GitHub release when a merge to main is released
 # and dispatches this workflow on that tag (a tag pushed by GITHUB_TOKEN doesn't
 # trigger tag-push workflows). Pushing a vX.Y.Z tag by hand also runs it. Safe
 # to re-run: binaries are re-uploaded and a version already on crates.io is
