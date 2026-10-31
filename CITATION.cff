@@ -12,8 +12,8 @@ authors:
   - family-names: McMeen
     given-names: John
     email: johnmcmeen@gmail.com
-version: 0.2.4
-date-released: 2026-10-17
+version: 0.2.5
+date-released: 2026-10-31
 doi: 10.5281/zenodo.20515989
 license:
   - MIT
