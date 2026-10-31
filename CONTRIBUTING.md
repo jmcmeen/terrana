@@ -29,9 +29,14 @@ documentation, new file formats, geometry operations, and performance work.
 You'll need a Rust toolchain (stable). If you don't have one, see
 [Installing Rust](README.md#installing-rust) in the README.
 
+Only the maintainer can push to this repository, so contributions come in as pull
+requests from a fork. Fork [jmcmeen/terrana](https://github.com/jmcmeen/terrana) on
+GitHub, then clone your fork:
+
 ```bash
-git clone https://github.com/jmcmeen/terrana.git
+git clone https://github.com/YOUR-USERNAME/terrana.git   # your fork
 cd terrana
+git remote add upstream https://github.com/jmcmeen/terrana.git
 cargo build
 cargo run -- serve testdata/observations.csv
 ```
@@ -100,7 +105,9 @@ from a **single `vX.Y.Z` tag** and **share one version**:
 - For a **minor or major** release, the maintainer runs the workflow by hand on
   `main`: `gh workflow run release.yml -f bump=minor` (or `major`). Follow
   [SemVer](https://semver.org).
-- Flow: work on `dev`, open a PR into `main`; the merge to `main` is the release.
+- Flow: in your fork, branch from `upstream/main` (`git fetch upstream && git switch -c
+  fix/short-description --no-track upstream/main`), push the branch to your fork and open a
+  PR into `main`. The maintainer merges it, and the merge to `main` is the release.
 
 Contributors don't touch version numbers — just note user-facing changes in
 [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
