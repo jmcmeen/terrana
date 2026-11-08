@@ -67,6 +67,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        # A tag's cache can't be read by any other run; only main saves.
+        with:
+          save-if: false
       - run: cargo build --release --target ${{ matrix.target }}
       - name: Package
         run: |
@@ -104,6 +107,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        # A tag's cache can't be read by any other run; only main saves.
+        with:
+          save-if: false
       # crates.io publishes the version in Cargo.toml, not the tag — so guard that
       # they agree before publishing (versions are immutable and can't be re-pushed).
       - name: Verify Cargo.toml version matches the tag
