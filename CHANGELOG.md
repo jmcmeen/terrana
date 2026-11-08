@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Release runs don't save build caches, which only that tag could read and which pushed main's
+  out of the cache quota (#40)
+
 ## [0.2.6] - 2026-11-08
 
 ### Changed
