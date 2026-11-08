@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI keeps main's build caches warm with two scheduled runs a week, saves caches only from
+  `main`, drops the `Check` job that Clippy covers, and cancels a PR's superseded runs (#38)
+
 ## [0.2.1] - 2026-06-25
 
 ### Added

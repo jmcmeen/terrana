@@ -5,21 +5,24 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # GitHub evicts a cache after 7 days unused. Two runs a week on main keep its
+  # caches (which PR runs restore) warm, so a PR doesn't recompile DuckDB from
+  # scratch. Release only follows push runs, so these never release.
+  schedule:
+    - cron: "17 7 * * 1,4"
+
+concurrency:
+  # A new push to a PR cancels its older run. Every other run gets its own group,
+  # so each push to main finishes CI and can be released.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
-
+  # Clippy runs every check `cargo check` would, over all targets.
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -29,6 +32,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets -- -D warnings
 
   fmt:
@@ -48,6 +53,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Includes the #[ignore]d integration tests, which start the server and need
       # network access to fetch the DuckDB spatial extension on first run.
       - run: cargo test --all -- --include-ignored
@@ -62,6 +69,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --release
       - uses: actions/upload-artifact@v4
         with:
@@ -81,6 +90,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: python
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@v5
       # Single shell so the activated venv persists across build + test. Needs
       # network (DuckDB fetches its `spatial` extension on first use — CI has it).
