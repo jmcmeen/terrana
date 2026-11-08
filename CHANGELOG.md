@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-08
+
 ### Changed
 
 - CI keeps main's build caches warm with two scheduled runs a week, saves caches only from
@@ -100,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a SQL-injection vector in the `--table` argument for `.duckdb` sources: the table identifier is now validated and quoted before interpolation
 - Bounding-box query parameters are now range-validated (lat ∈ [-90, 90], lon ∈ [-180, 180], min ≤ max)
 
-[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/jmcmeen/terrana/compare/v0.2.5...v0.2.6
 [0.2.1]: https://github.com/jmcmeen/terrana/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jmcmeen/terrana/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jmcmeen/terrana/compare/v0.1.0...v0.1.1
