@@ -11,9 +11,20 @@ use std::sync::{Mutex, MutexGuard};
 
 /// Load the DuckDB spatial extension.
 /// Called after file ingestion, NOT at connection time.
+///
+/// `INSTALL` downloads the extension into DuckDB's extension directory
+/// (`~/.duckdb/extensions/<version>/<platform>/` by default) the first time, and
+/// is a local no-op once it's there, so only the first run needs the network.
 pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("INSTALL spatial; LOAD spatial;")
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(anyhow::anyhow!(
+                "couldn't install or load DuckDB's spatial extension (the first run downloads \
+                 it, so needs network access; later runs load it from DuckDB's extension \
+                 directory): {}",
+                e
+            ))
+        })?;
     Ok(())
 }
 

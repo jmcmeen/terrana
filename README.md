@@ -430,13 +430,13 @@ Or in prose: *Terrana (2026). Zero-config spatial API server. <https://doi.org/1
 ## Testing
 
 ```bash
-cargo test                       # fast unit tests (offline)
-cargo test -- --include-ignored  # + integration tests (start the server; need network)
+cargo test     # unit + integration tests
 ```
 
 The integration tests in [tests/api.rs](tests/api.rs) spawn the real binary and hit
-the HTTP endpoints. They are `#[ignore]`d by default because starting the server
-downloads the DuckDB `spatial` extension on first use.
+the HTTP endpoints. Starting the server needs DuckDB's `spatial` extension, which DuckDB
+downloads on first use and caches in `~/.duckdb/extensions/`. So the first run needs network
+access; after that the tests, like the server, run offline.
 
 ## Contributing
 

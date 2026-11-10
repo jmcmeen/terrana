@@ -74,10 +74,7 @@ fn stage_file_inner(conn: &Connection, path: &Path, table: Option<&str>) -> Resu
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Parquet ingestion error: {}", e)))?;
         }
         "geojson" | "json" => {
-            conn.execute_batch("INSTALL spatial; LOAD spatial;")
-                .map_err(|e| {
-                    AppError::Internal(anyhow::anyhow!("Spatial extension error: {}", e))
-                })?;
+            crate::db::ensure_spatial(conn)?;
             conn.execute_batch(&format!(
                 "CREATE TABLE raw_data_stage AS SELECT ROW_NUMBER() OVER () AS rowid, * FROM ST_Read('{}')",
                 escape_sql_string(&path_str)
@@ -371,8 +368,9 @@ mod tests {
         assert_eq!(escape_sql_string("a'b"), "a''b");
     }
 
+    /// Needs DuckDB's spatial extension: cached after the first download, so offline
+    /// from then on.
     #[test]
-    #[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
     fn ingest_file_loads_and_detects_columns() {
         let conn = crate::db::create_connection().unwrap();
         let info = ingest_file(

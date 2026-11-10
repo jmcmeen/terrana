@@ -40,12 +40,12 @@ bench: ## Run the benchmark suite (e.g. make bench DATASET=1m)
 	./testdata/bench.sh $(DATASET)
 
 .PHONY: test
-test: ## Run fast unit tests (offline)
+test: ## Run unit + integration tests (offline once the spatial extension is cached)
 	cargo test
 
-.PHONY: test-all
-test-all: ## Run unit + integration tests (starts the server; needs network)
-	cargo test --all -- --include-ignored
+.PHONY: test-fast
+test-fast: ## Run the tests that never need DuckDB's spatial extension (offline, no cache)
+	cargo test --lib --bins -- --skip ingest_file_loads_and_detects_columns
 
 .PHONY: fmt
 fmt: ## Format the code
@@ -64,7 +64,7 @@ check: ## Type-check all targets
 	cargo check --all-targets
 
 .PHONY: ci
-ci: fmt-check lint test ## Run the offline CI gate (fmt + clippy + unit tests)
+ci: fmt-check lint test ## Run the CI gate (fmt + clippy + all tests; offline once cached)
 
 .PHONY: install
 install: ## Install the terrana binary from this checkout

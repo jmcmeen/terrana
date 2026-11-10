@@ -55,9 +55,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Includes the #[ignore]d integration tests, which start the server and need
-      # network access to fetch the DuckDB spatial extension on first run.
-      - run: cargo test --all -- --include-ignored
+      # The integration tests start the server, which needs DuckDB's spatial
+      # extension. Caching it keeps the tests off the network after the first run.
+      # Keyed on the duckdb crate version alone, so other dependency bumps reuse it;
+      # saved from main only, like rust-cache.
+      - id: duckdb
+        run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+      - run: cargo test --all
+      - uses: actions/cache/save@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
 
   build:
     name: Build
@@ -92,8 +105,14 @@ jobs:
           workspaces: python
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@v5
-      # Single shell so the activated venv persists across build + test. Needs
-      # network (DuckDB fetches its `spatial` extension on first use — CI has it).
+      # The server tests need DuckDB's spatial extension; cached as in the test job.
+      - id: duckdb
+        run: echo "version=$(grep -A1 '^name = "duckdb"$' python/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+      # Single shell so the activated venv persists across build + test.
       - name: Build extension and run tests
         working-directory: python
         run: |
@@ -103,3 +122,8 @@ jobs:
           maturin develop
           # --timeout caps any single test so a stuck server test can't hang the job.
           pytest tests/ -v --timeout=120
+      - uses: actions/cache/save@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
