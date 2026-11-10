@@ -3,6 +3,7 @@
 //! interpolation into SQL.
 
 use crate::db;
+use crate::db::filter::Condition;
 use crate::error::AppError;
 use chrono::NaiveDate;
 use duckdb::arrow::datatypes::DataType;
@@ -79,7 +80,7 @@ pub fn within_filter_geojson(geojson_str: &str) -> String {
 pub fn query(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
-    where_clauses: &[(String, String)],
+    conditions: &[Condition],
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
@@ -90,7 +91,7 @@ pub fn query(
     run_query(
         db,
         spatial_where,
-        where_clauses,
+        conditions,
         select_cols,
         group_by,
         agg,
@@ -109,7 +110,7 @@ pub fn query(
 pub fn query_page(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
-    where_clauses: &[(String, String)],
+    conditions: &[Condition],
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
@@ -121,7 +122,7 @@ pub fn query_page(
     run_query(
         db,
         spatial_where,
-        where_clauses,
+        conditions,
         select_cols,
         group_by,
         agg,
@@ -138,7 +139,7 @@ pub fn query_page(
 fn run_query(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
-    where_clauses: &[(String, String)],
+    conditions: &[Condition],
     select_cols: Option<&[String]>,
     group_by: Option<&str>,
     agg: Option<&str>,
@@ -150,7 +151,7 @@ fn run_query(
     // Aggregation path
     if let (Some(gb), Some(a)) = (group_by, agg) {
         db::validate_column_name(gb)?;
-        return query_aggregate(db, spatial_where, where_clauses, gb, a, limit, offset);
+        return query_aggregate(db, spatial_where, conditions, gb, a, limit, offset);
     }
 
     let table = if spatial_where.is_some() {
@@ -187,25 +188,7 @@ fn run_query(
     };
 
     let mut sql = format!("SELECT {} FROM {}", select, table);
-    let mut conditions = Vec::new();
-
-    if let Some(sw) = spatial_where {
-        conditions.push(sw.to_string());
-    }
-
-    for (col, val) in where_clauses {
-        db::validate_column_name(col)?;
-        conditions.push(format!(
-            "CAST(\"{}\" AS VARCHAR) = '{}'",
-            col,
-            escape_sql_value(val)
-        ));
-    }
-
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    sql.push_str(&where_clause(spatial_where, conditions));
 
     match offset {
         Some(off) => {
@@ -224,6 +207,20 @@ fn run_query(
     execute_query_to_json(db, &sql)
 }
 
+/// ` WHERE ...` joining the spatial filter and the `where` conditions with AND,
+/// or nothing when there are none.
+fn where_clause(spatial_where: Option<&str>, conditions: &[Condition]) -> String {
+    let parts: Vec<&str> = spatial_where
+        .into_iter()
+        .chain(conditions.iter().map(Condition::sql))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", parts.join(" AND "))
+    }
+}
+
 /// ORDER BY clause ending in the loader's `rowid`, so ties (and unordered queries)
 /// come back in the same order on every request.
 fn order_clause(order_by: Option<&str>) -> String {
@@ -236,7 +233,7 @@ fn order_clause(order_by: Option<&str>) -> String {
 fn query_aggregate(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
-    where_clauses: &[(String, String)],
+    conditions: &[Condition],
     group_by: &str,
     agg: &str,
     limit: usize,
@@ -267,25 +264,7 @@ fn query_aggregate(
     };
     let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
 
-    let mut conditions = Vec::new();
-
-    if let Some(sw) = spatial_where {
-        conditions.push(sw.to_string());
-    }
-
-    for (col, val) in where_clauses {
-        db::validate_column_name(col)?;
-        conditions.push(format!(
-            "CAST(\"{}\" AS VARCHAR) = '{}'",
-            col,
-            escape_sql_value(val)
-        ));
-    }
-
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    sql.push_str(&where_clause(spatial_where, conditions));
 
     sql.push_str(&format!(" GROUP BY \"{}\"", group_by));
     match offset {
@@ -454,20 +433,9 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
     }
 }
 
-fn escape_sql_value(s: &str) -> String {
-    s.replace('\'', "''")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn escape_doubles_single_quotes() {
-        assert_eq!(escape_sql_value("o'brien"), "o''brien");
-        assert_eq!(escape_sql_value("'; DROP --"), "''; DROP --");
-        assert_eq!(escape_sql_value("plain"), "plain");
-    }
 
     #[test]
     fn bbox_filter_uses_lon_lat_order() {

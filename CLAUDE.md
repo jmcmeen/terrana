@@ -103,6 +103,7 @@ terrana/
     ├── db/
     │   ├── mod.rs             ← DuckDB connection setup, spatial extension, re-exports
     │   ├── loader.rs          ← file ingestion, spatial index creation
+    │   ├── filter.rs          ← `where` clause parsing and typed SQL conditions
     │   └── query.rs           ← SQL query builders, spatial filter helpers
     ├── geometry/
     │   ├── mod.rs             ← re-exports, shared helpers
@@ -291,7 +292,7 @@ Body: GeoJSON `Polygon`, `MultiPolygon`, `Feature`, or `FeatureCollection`. Uses
 | Param | Description | Example |
 |---|---|---|
 | `select` | Column allowlist (comma-separated) | `select=species,observed_on` |
-| `where` | Equality filter (repeatable) | `where=quality_grade:research` |
+| `where` | Filters (repeatable, comma-separated, ANDed): `col:value`/`col:eq:value`, `ne`, `gt`, `gte`, `lt`, `lte`, `col:between:lo\|hi`, `col:in:a\|b`, `col:nin:a\|b`, `col:isnull`, `col:notnull`. Values typed by the column's schema type (`src/db/filter.rs`) | `where=count:gte:5` |
 | `group_by` | Group column | `group_by=species` |
 | `agg` | Aggregation | `agg=count` or `agg=sum:count` |
 | `limit` | Max rows (default 1000, hard cap 100000) | `limit=500` |

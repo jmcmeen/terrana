@@ -1,6 +1,7 @@
 //! DuckDB connection management, the spatial extension, schema discovery, and the
 //! column-name validator shared by all query builders.
 
+pub mod filter;
 pub mod loader;
 pub mod query;
 
