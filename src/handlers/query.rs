@@ -6,7 +6,8 @@ use crate::db::query::{DEFAULT_LIMIT, MAX_RESULT_LIMIT};
 use crate::error::AppError;
 use crate::output;
 use crate::server::AppState;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
+use axum::http::{header, HeaderValue};
 use axum::response::Response;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -29,81 +30,147 @@ pub struct QueryParams {
 
 /// Dispatch a `GET /query` request to the bbox, nearest, radius, or plain-table path
 /// based on which parameters are present, then serialize to the requested format.
+///
+/// Results are paged: `offset` skips rows of the (stably ordered) result, and when
+/// more rows follow the response carries a `Link: <...>; rel="next"` header.
 pub async fn query(
     State(state): State<AppState>,
+    RawQuery(raw_query): RawQuery,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let qp = parse_query_params(&params)?;
+    let offset = parse_offset(params.get("offset"))?;
     let limit = qp.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULT_LIMIT);
     let format = qp.format.as_deref().unwrap_or("json");
     let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
     let select_cols = parse_select(qp.select.as_deref());
 
-    if let Some(bbox_str) = &qp.bbox {
-        // Bounding box query
+    // (spatial filter, extra select, order by, page size) for each kind of query.
+    let (spatial, extra, order_by, page_size) = if let Some(bbox_str) = &qp.bbox {
         let bbox = parse_bbox(bbox_str)?;
-        let spatial = db::query::bbox_filter(bbox.0, bbox.1, bbox.2, bbox.3);
-
-        let rows = db::query::query(
-            &state.db,
-            Some(&spatial),
-            &where_clauses,
-            select_cols.as_deref(),
-            qp.group_by.as_deref(),
-            qp.agg.as_deref(),
-            limit,
-            None,
-            None,
-        )?;
-        output::format_response(&rows, format, &state)
+        // Ranges, not the R-tree's ST_Intersects: the page is sorted by rowid.
+        let spatial = db::query::bbox_point_filter(bbox.0, bbox.1, bbox.2, bbox.3);
+        (Some(spatial), None, None, limit)
     } else if let (Some(lat), Some(lon), Some(nearest)) = (qp.lat, qp.lon, qp.nearest) {
-        // Nearest neighbor query — ORDER BY distance + LIMIT
+        // Nearest neighbor: the K nearest, or with `offset` the next K.
         let extra = db::query::distance_select(lat, lon);
-        let rows = db::query::query(
-            &state.db,
-            Some("geom IS NOT NULL"),
-            &where_clauses,
-            select_cols.as_deref(),
-            qp.group_by.as_deref(),
-            qp.agg.as_deref(),
-            nearest,
-            Some(&extra),
+        (
+            Some("geom IS NOT NULL".to_string()),
+            Some(extra),
             Some("_distance_km ASC"),
-        )?;
-        output::format_response(&rows, format, &state)
+            nearest.min(MAX_RESULT_LIMIT),
+        )
     } else if let (Some(lat), Some(lon), Some(radius_str)) = (qp.lat, qp.lon, &qp.radius) {
-        // Radius query
         let radius_m = parse_radius(radius_str)?;
         let spatial = db::query::radius_filter(lat, lon, radius_m);
         let extra = db::query::distance_select(lat, lon);
-
-        let rows = db::query::query(
-            &state.db,
-            Some(&spatial),
-            &where_clauses,
-            select_cols.as_deref(),
-            qp.group_by.as_deref(),
-            qp.agg.as_deref(),
-            limit,
-            Some(&extra),
-            Some("_distance_km ASC"),
-        )?;
-        output::format_response(&rows, format, &state)
+        (Some(spatial), Some(extra), Some("_distance_km ASC"), limit)
     } else {
         // No spatial filter — plain table query
-        let rows = db::query::query(
-            &state.db,
-            None,
-            &where_clauses,
-            select_cols.as_deref(),
-            qp.group_by.as_deref(),
-            qp.agg.as_deref(),
-            limit,
-            None,
-            None,
-        )?;
-        output::format_response(&rows, format, &state)
+        (None, None, None, limit)
+    };
+
+    if page_size == 0 {
+        return output::format_response(&[], format, &state);
     }
+
+    // One row past the page says whether another page follows.
+    let mut rows = db::query::query_page(
+        &state.db,
+        spatial.as_deref(),
+        &where_clauses,
+        select_cols.as_deref(),
+        qp.group_by.as_deref(),
+        qp.agg.as_deref(),
+        page_size + 1,
+        offset,
+        extra.as_deref(),
+        order_by,
+    )?;
+    let has_next = rows.len() > page_size;
+    rows.truncate(page_size);
+
+    let mut response = output::format_response(&rows, format, &state)?;
+    if has_next {
+        let link = next_link(raw_query.as_deref(), offset.saturating_add(page_size));
+        let value = HeaderValue::from_str(&link)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Link header error: {}", e)))?;
+        response.headers_mut().insert(header::LINK, value);
+    }
+    Ok(response)
+}
+
+/// `offset` must be a non-negative integer when given; absent means 0.
+fn parse_offset(value: Option<&String>) -> Result<usize, AppError> {
+    match value {
+        None => Ok(0),
+        // DuckDB's OFFSET is a signed 64-bit integer.
+        Some(v) => match v.trim().parse::<usize>() {
+            Ok(n) if i64::try_from(n).is_ok() => Ok(n),
+            _ => Err(AppError::BadRequest(format!(
+                "Invalid offset: '{}'. Use a non-negative integer",
+                v
+            ))),
+        },
+    }
+}
+
+/// `Link` header value for the next page: the request's own query string (kept
+/// as sent) with `offset` replaced. The target is the relative reference `?...`,
+/// which resolves against the request's own path, so it stays right behind a
+/// proxy that mounts the API under a prefix. Bytes a header can't carry (raw
+/// non-ASCII, spaces, controls) are percent-encoded.
+fn next_link(raw_query: Option<&str>, next_offset: usize) -> String {
+    let mut parts: Vec<&str> = raw_query
+        .unwrap_or("")
+        .split('&')
+        .filter(|p| !p.is_empty() && !is_offset_param(p))
+        .collect();
+    let offset_part = format!("offset={}", next_offset);
+    parts.push(&offset_part);
+    format!(
+        "<?{}>; rel=\"next\"",
+        encode_header_unsafe(&parts.join("&"))
+    )
+}
+
+/// Whether a raw `key=value` pair sets `offset`, however the key is encoded.
+fn is_offset_param(pair: &str) -> bool {
+    percent_decode(pair.split('=').next().unwrap_or("")) == b"offset"
+}
+
+/// Decode `%XX` escapes (and `+` as space), as form-encoded query keys are.
+fn percent_decode(s: &str) -> Vec<u8> {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    out
+}
+
+/// Percent-encode every byte outside visible ASCII, plus `<` and `>` (they
+/// delimit the target in a `Link` header).
+fn encode_header_unsafe(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if (0x21..=0x7e).contains(&b) && b != b'<' && b != b'>' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 fn parse_query_params(params: &HashMap<String, String>) -> Result<QueryParams, AppError> {
@@ -236,6 +303,38 @@ mod tests {
             ]
         );
         assert!(parse_where_clauses(None).is_empty());
+    }
+
+    #[test]
+    fn offset_defaults_to_zero_and_rejects_bad_values() {
+        assert_eq!(parse_offset(None).unwrap(), 0);
+        assert_eq!(parse_offset(Some(&"25".to_string())).unwrap(), 25);
+        assert!(parse_offset(Some(&"-1".to_string())).is_err());
+        assert!(parse_offset(Some(&"ten".to_string())).is_err());
+        assert!(parse_offset(Some(&u64::MAX.to_string())).is_err());
+    }
+
+    #[test]
+    fn next_link_replaces_offset_and_keeps_the_rest() {
+        assert_eq!(
+            next_link(Some("bbox=35,-84,37,-81&offset=10&limit=10"), 20),
+            "<?bbox=35,-84,37,-81&limit=10&offset=20>; rel=\"next\""
+        );
+        assert_eq!(
+            next_link(Some("where=species:Eastern%20Bluebird"), 1000),
+            "<?where=species:Eastern%20Bluebird&offset=1000>; rel=\"next\""
+        );
+        assert_eq!(next_link(None, 5), "<?offset=5>; rel=\"next\"");
+        // A raw non-ASCII byte can't go into a header; it is encoded.
+        assert_eq!(
+            next_link(Some("where=species:Mésange"), 1),
+            "<?where=species:M%C3%A9sange&offset=1>; rel=\"next\""
+        );
+        // An encoded `offset` key is still the offset.
+        assert_eq!(
+            next_link(Some("off%73et=5&limit=2"), 7),
+            "<?limit=2&offset=7>; rel=\"next\""
+        );
     }
 
     #[test]

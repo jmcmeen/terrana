@@ -196,6 +196,8 @@ pub async fn serve<A: tokio::net::ToSocketAddrs>(
 ) -> std::io::Result<()> {
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // The bound address, not the requested one, so `--port 0` reports its port.
+    tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await

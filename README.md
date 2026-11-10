@@ -119,7 +119,26 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 | `group_by` | `group_by=species` | Group column |
 | `agg` | `agg=count` or `agg=sum:count` | Aggregation |
 | `limit` | `limit=500` | Max rows (default 1000, cap 100000) |
+| `offset` | `offset=1000` | Rows to skip, for paging (see below) |
 | `format` | `format=json\|csv\|geojson` | Output format |
+
+### Paging
+
+Every `/query` result has a fixed order: nearest first for radius and nearest queries, then
+by row (the `rowid` column, numbered as the file is loaded); aggregates by group. `offset` skips
+that many rows. When more rows follow, the response has a `Link` header (RFC 8288) pointing
+at the next page, with your other parameters kept. The target is relative (`?...`), so it
+resolves against whatever path you called, including behind a proxy:
+
+```
+$ curl -i "localhost:8080/query?bbox=35,-84,37,-81&limit=100"
+link: <?bbox=35,-84,37,-81&limit=100&offset=100>; rel="next"
+```
+
+The body is unchanged (JSON array, CSV or GeoJSON), so the header works the same for every
+format; no `Link` header means the last page. With `nearest=K`, `offset` gives the next K
+nearest; `nearest`, like `limit`, is capped at 100,000 per page. Offsets count rows in the data loaded now: if `--watch` reloads the file between
+pages, rows can shift.
 
 ### Geometry Endpoints
 
