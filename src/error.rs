@@ -12,6 +12,8 @@ use serde_json::json;
 pub enum AppError {
     #[error("Invalid query parameter: {0}")]
     BadRequest(String),
+    #[error("Missing or invalid bearer token")]
+    Unauthorized,
     #[error("Column not found: {0}")]
     ColumnNotFound(String),
     #[error("File not found: {0}")]
@@ -27,7 +29,17 @@ pub enum AppError {
 #[cfg(feature = "server")]
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        if let AppError::Unauthorized = self {
+            let body = json!({ "error": self.to_string() });
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
+                axum::Json(body),
+            )
+                .into_response();
+        }
         let (status, message) = match &self {
+            AppError::Unauthorized => unreachable!("answered above"),
             AppError::BadRequest(_) | AppError::ColumnNotFound(_) => {
                 (StatusCode::BAD_REQUEST, self.to_string())
             }

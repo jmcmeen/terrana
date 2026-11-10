@@ -54,11 +54,18 @@ fn spawn(extra_args: &[&str]) -> TestServer {
 /// The OS picks the port when the server binds, and the server logs the address it
 /// bound, so parallel tests can never be handed the same port.
 fn spawn_file(file: &str, extra_args: &[&str]) -> TestServer {
+    spawn_with_env(file, extra_args, &[])
+}
+
+/// [`spawn_file`] with extra environment variables for the server.
+fn spawn_with_env(file: &str, extra_args: &[&str], envs: &[(&str, &str)]) -> TestServer {
     let mut args = vec!["serve", file, "--port", "0"];
     args.extend_from_slice(extra_args);
     let mut child = Command::new(env!("CARGO_BIN_EXE_terrana"))
         .args(&args)
         .env("NO_COLOR", "1")
+        .env_remove("TERRANA_TOKEN")
+        .envs(envs.iter().copied())
         .stdout(Stdio::piped())
         .spawn()
         .expect("failed to spawn terrana binary");
@@ -624,4 +631,143 @@ fn where_rejects_bad_values_and_unknown_columns() {
     ] {
         assert_eq!(error_status(&s, path), 400, "{path}");
     }
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn a_token_guards_everything_but_health() {
+    let s = spawn_with_env(
+        "testdata/observations.csv",
+        &[],
+        &[("TERRANA_TOKEN", "s3cret")],
+    );
+    assert_eq!(get_json(&s, "/health")["status"], "ok");
+
+    for path in ["/query?limit=1", "/schema", "/stats"] {
+        assert_eq!(error_status(&s, path), 401, "{path} without a token");
+        let wrong = ureq::get(s.url(path))
+            .header("Authorization", "Bearer nope")
+            .call();
+        assert!(
+            matches!(wrong, Err(ureq::Error::StatusCode(401))),
+            "{path} with a wrong token"
+        );
+        let resp = ureq::get(s.url(path))
+            .header("Authorization", "Bearer s3cret")
+            .call()
+            .unwrap_or_else(|e| panic!("{path} with the token: {e}"));
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+    // The scheme is case-insensitive.
+    let lower = ureq::get(s.url("/schema"))
+        .header("Authorization", "bearer s3cret")
+        .call()
+        .unwrap();
+    assert_eq!(lower.status().as_u16(), 200);
+    // Default CORS with a token: a browser preflight asking for Authorization is allowed.
+    let preflight = ureq::options(s.url("/query"))
+        .header("Origin", "https://any.example")
+        .header("Access-Control-Request-Method", "GET")
+        .header("Access-Control-Request-Headers", "authorization")
+        .call()
+        .expect("preflight should succeed without a token");
+    assert!(header_of(&preflight, "access-control-allow-headers")
+        .unwrap()
+        .contains("authorization"));
+    let post = ureq::post(s.url("/geometry/distance")).send_json(serde_json::json!({
+        "from": {"type": "Point", "coordinates": [0.0, 0.0]},
+        "to": {"type": "Point", "coordinates": [0.0, 1.0]}
+    }));
+    assert!(matches!(post, Err(ureq::Error::StatusCode(401))));
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn the_token_can_come_from_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("token");
+    std::fs::write(&token, "from-file\n").unwrap();
+    let s = spawn_file(
+        "testdata/observations.csv",
+        &["--token-file", token.to_str().unwrap()],
+    );
+    assert_eq!(error_status(&s, "/schema"), 401);
+    let resp = ureq::get(s.url("/schema"))
+        .header("Authorization", "Bearer from-file")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+}
+
+/// The value of response header `name`, if present.
+fn header_of(resp: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
+    resp.headers()
+        .get(name)
+        .map(|v| v.to_str().unwrap().to_string())
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn cors_allows_only_the_listed_origins() {
+    let s = spawn_with_env(
+        "testdata/observations.csv",
+        &["--cors-origin", "https://maps.example.org"],
+        &[("TERRANA_TOKEN", "s3cret")],
+    );
+    // A browser preflight carries no token, and must still get through.
+    let preflight = ureq::options(s.url("/query"))
+        .header("Origin", "https://maps.example.org")
+        .header("Access-Control-Request-Method", "GET")
+        .header("Access-Control-Request-Headers", "authorization")
+        .call()
+        .expect("preflight should succeed without a token");
+    assert_eq!(
+        header_of(&preflight, "access-control-allow-origin").as_deref(),
+        Some("https://maps.example.org")
+    );
+    assert!(header_of(&preflight, "access-control-allow-headers")
+        .unwrap()
+        .contains("authorization"));
+
+    let get = |origin: &str| {
+        ureq::get(s.url("/query?limit=1"))
+            .header("Origin", origin)
+            .header("Authorization", "Bearer s3cret")
+            .call()
+            .unwrap()
+    };
+    let allowed = get("https://maps.example.org");
+    assert_eq!(
+        header_of(&allowed, "access-control-allow-origin").as_deref(),
+        Some("https://maps.example.org")
+    );
+    assert_eq!(
+        header_of(&allowed, "access-control-expose-headers").as_deref(),
+        Some("link")
+    );
+    assert_eq!(
+        header_of(&get("https://other.example"), "access-control-allow-origin"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn cors_is_open_by_default_and_can_be_turned_off() {
+    let open = spawn(&[]);
+    let resp = ureq::get(open.url("/health"))
+        .header("Origin", "https://any.example")
+        .call()
+        .unwrap();
+    assert_eq!(
+        header_of(&resp, "access-control-allow-origin").as_deref(),
+        Some("*")
+    );
+
+    let off = spawn(&["--cors-origin", "none"]);
+    let resp = ureq::get(off.url("/health"))
+        .header("Origin", "https://any.example")
+        .call()
+        .unwrap();
+    assert_eq!(header_of(&resp, "access-control-allow-origin"), None);
 }

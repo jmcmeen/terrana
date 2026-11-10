@@ -248,6 +248,9 @@ Options:
   --bind <ADDR>       Bind address [default: 127.0.0.1]
   --watch             Re-index when source file changes
   --disk              Use on-disk DuckDB storage (reduces RAM for large files)
+  --cors-origin <ORIGIN>  Allowed browser origin (repeatable); `none` turns CORS off [default: any]
+  --token-file <PATH>  Bearer token file (first line); TERRANA_TOKEN works too. Every
+                      endpoint but /health then needs `Authorization: Bearer <token>`
   -h, --help          Print help
   -V, --version       Print version
 ```

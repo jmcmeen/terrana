@@ -10,7 +10,6 @@ use duckdb::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 /// State shared across all handlers. Cloning is cheap — every expensive field is
@@ -64,7 +63,7 @@ pub struct ColumnMeta {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", axum::routing::get(handlers::meta::health))
         .route("/schema", axum::routing::get(handlers::meta::schema))
         .route("/stats", axum::routing::get(handlers::meta::stats))
@@ -105,9 +104,17 @@ pub fn build_router(state: AppState) -> Router {
             "/geometry/bounds",
             axum::routing::post(handlers::geometry::bounds),
         )
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        // Layers run outside in, last added first: trace, then CORS (which answers
+        // preflights itself), then the token check.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_token,
+        ));
+    let router = match middleware::cors_layer(&state.config.cors) {
+        Some(cors) => router.layer(cors),
+        None => router,
+    };
+    router.layer(TraceLayer::new_for_http()).with_state(state)
 }
 
 /// Assemble a [`Snapshot`] from an already-ingested connection.

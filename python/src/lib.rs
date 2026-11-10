@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use terrana_core::config::Config;
 use terrana_core::db::query;
+use terrana_core::config::CorsPolicy;
 use terrana_core::server::{self, AppState};
 
 /// Map any displayable error (Terrana's `AppError`, pythonize failures) to a
@@ -299,6 +300,8 @@ impl TerranaSession {
             bind: bind.to_string(),
             watch: false,
             disk: false,
+            cors: CorsPolicy::Any,
+            token: None,
         };
         Ok(AppState {
             config: Arc::new(config),

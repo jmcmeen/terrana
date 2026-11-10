@@ -12,8 +12,10 @@
 //! Only built with the `server` feature (it needs axum/tokio); see [`crate`] docs.
 
 use crate::config::Config;
+use crate::config::{CorsPolicy, Token};
 use crate::db;
 use crate::error::AppError;
+use crate::server::middleware;
 use crate::server::{self, AppState, Snapshot};
 use clap::{Parser, Subcommand};
 use duckdb::Connection;
@@ -21,7 +23,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -65,6 +67,16 @@ pub enum Commands {
         /// Use on-disk DuckDB storage instead of in-memory (reduces RAM usage for large files)
         #[arg(long)]
         disk: bool,
+
+        /// Browser origin allowed to call the API (repeatable), e.g. https://maps.example.org.
+        /// Default: any origin. `none` turns CORS off
+        #[arg(long = "cors-origin", value_name = "ORIGIN")]
+        cors_origin: Vec<String>,
+
+        /// File holding a bearer token (first line). Then every endpoint but /health needs
+        /// `Authorization: Bearer <token>`. The TERRANA_TOKEN environment variable works too
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
     },
 }
 
@@ -91,7 +103,38 @@ where
             bind,
             watch,
             disk,
-        } => serve(file, lat, lon, table, port, bind, watch, disk),
+            cors_origin,
+            token_file,
+        } => {
+            let cors = CorsPolicy::from_args(&cors_origin).map_err(anyhow::Error::msg)?;
+            let token = resolve_token(token_file.as_deref(), std::env::var("TERRANA_TOKEN").ok())?;
+            serve(file, lat, lon, table, port, bind, watch, disk, cors, token)
+        }
+    }
+}
+
+/// The bearer token from `--token-file` (its first line) or `TERRANA_TOKEN`, if
+/// either is set. An empty `TERRANA_TOKEN` counts as unset (Docker Compose passes
+/// one through empty); both at once, or an empty file, is an error. There is no
+/// `--token` flag: a token on the command line shows in the process list.
+fn resolve_token(file: Option<&Path>, env: Option<String>) -> anyhow::Result<Option<Token>> {
+    let env = env.filter(|e| !e.trim().is_empty());
+    let token = match (file, env) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("set the token with --token-file or TERRANA_TOKEN, not both")
+        }
+        (Some(path), None) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                anyhow::anyhow!("can't read --token-file {}: {}", path.display(), e)
+            })?;
+            text.lines().next().unwrap_or("").trim().to_string()
+        }
+        (None, Some(env)) => env,
+        (None, None) => return Ok(None),
+    };
+    match Token::new(&token) {
+        Some(t) => Ok(Some(t)),
+        None => anyhow::bail!("the bearer token file is empty"),
     }
 }
 
@@ -116,7 +159,16 @@ fn serve(
     bind: String,
     watch: bool,
     disk: bool,
+    cors: CorsPolicy,
+    token: Option<Token>,
 ) -> anyhow::Result<()> {
+    if token.is_none() && !middleware::is_loopback(&bind) {
+        warn!(
+            "binding {} without a token: anyone who can reach this port can read the data. \
+             Set TERRANA_TOKEN or --token-file",
+            bind
+        );
+    }
     let config = Config {
         file: file.clone(),
         lat_col: lat.clone(),
@@ -126,6 +178,8 @@ fn serve(
         bind: bind.clone(),
         watch,
         disk,
+        cors,
+        token,
     };
 
     info!("terrana v{}", env!("CARGO_PKG_VERSION"));
@@ -333,4 +387,43 @@ fn spawn_watcher(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::resolve_token;
+
+    #[test]
+    fn token_comes_from_the_file_or_the_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "  s3cret  \nignored\n").unwrap();
+        let get = |file, env| {
+            resolve_token(file, env)
+                .unwrap()
+                .map(|t| t.as_str().to_string())
+        };
+        assert_eq!(get(Some(&path), None).as_deref(), Some("s3cret"));
+        assert_eq!(get(None, Some("abc".into())).as_deref(), Some("abc"));
+        assert_eq!(get(None, None), None);
+        // Docker Compose passes an unset variable through as empty: no token.
+        assert_eq!(get(None, Some("".into())), None);
+        assert_eq!(
+            get(Some(&path), Some(" ".into())).as_deref(),
+            Some("s3cret")
+        );
+    }
+
+    #[test]
+    fn token_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "\n").unwrap();
+        assert!(resolve_token(Some(&path), None).is_err(), "empty file");
+        assert!(
+            resolve_token(Some(&path), Some("x".into())).is_err(),
+            "both"
+        );
+        assert!(resolve_token(Some(&dir.path().join("missing")), None).is_err());
+    }
 }

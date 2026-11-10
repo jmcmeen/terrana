@@ -6,3 +6,7 @@ services:
     volumes:
       - ./data:/data
     command: ["serve", "/data/observations.csv", "--bind", "0.0.0.0"]
+    environment:
+      # Bearer token every endpoint but /health requires. Set it in your shell or a
+      # .env file; unset, the server is open to anyone who can reach port 8080.
+      TERRANA_TOKEN: ${TERRANA_TOKEN:-}

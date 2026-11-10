@@ -91,6 +91,29 @@ terrana serve <FILE> [OPTIONS]
 | `--bind <ADDR>` | Bind address | 127.0.0.1 |
 | `--watch` | Re-index when source file changes | off |
 | `--disk` | Use on-disk DuckDB storage (reduces RAM for large files) | off |
+| `--cors-origin <ORIGIN>` | Browser origin allowed to call the API (repeatable); `none` turns CORS off | any origin |
+| `--token-file <PATH>` | Require a bearer token, read from the file's first line (or set `TERRANA_TOKEN`) | no token |
+
+### Access control
+
+On the default `127.0.0.1` only this machine can reach the server. Before binding anything
+else (`--bind 0.0.0.0`, Docker), set a token. Every endpoint except `/health` then needs it:
+
+```bash
+export TERRANA_TOKEN="$(openssl rand -hex 32)"
+terrana serve observations.csv --bind 0.0.0.0
+curl -H "Authorization: Bearer $TERRANA_TOKEN" "localhost:8080/query?limit=5"
+```
+
+Use `TERRANA_TOKEN` or `--token-file`; there's no `--token` flag, because a token on the
+command line shows in the process list. A missing or wrong token gets a 401. `/health` stays
+open for load balancers and container health checks. Binding a non-loopback address without a
+token logs a warning.
+
+CORS allows any origin by default. To let only your own web app call the API from a browser,
+list its origins: `--cors-origin https://maps.example.org --cors-origin http://localhost:3000`.
+With a list, browsers may send the `Authorization` header and read `Link` (for paging).
+`--cors-origin none` sends no CORS headers at all.
 
 ### Auto-detection of lat/lon columns
 
@@ -333,7 +356,7 @@ docker compose up --build
 # → http://localhost:8080
 ```
 
-The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides.
+The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides. The container binds `0.0.0.0`, so set `TERRANA_TOKEN` (see [Access control](#access-control)); the compose file passes it through from your shell or a `.env` file.
 
 ## Benchmarks
 
