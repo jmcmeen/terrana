@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `cargo test` (and `make ci`) runs the integration tests, which were `#[ignore]`d because the
+  server needs DuckDB's spatial extension. It's cached in `~/.duckdb/extensions/` after the first
+  download, so they run offline from then on; the test harness installs it once before any
+  server starts, and CI caches it. `make test-fast` runs the tests that never need the extension.
+  A spatial-extension error now says the first run needs network access (#57)
+
 ## [0.2.11] - 2026-11-10
 
 ### Added

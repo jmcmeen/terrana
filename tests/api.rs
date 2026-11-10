@@ -3,17 +3,13 @@
 //! Each test spawns the real `terrana` binary against the bundled `testdata/` and
 //! exercises the HTTP endpoints over the loopback interface.
 //!
-//! These are `#[ignore]`d by default: starting the server builds a DuckDB spatial
-//! index, and the `spatial` extension is fetched from the network on first use. Run
-//! them in an environment with network access (CI does this) via:
-//!
-//! ```sh
-//! cargo test --test api -- --include-ignored
-//! ```
+//! The server needs DuckDB's `spatial` extension. It is cached in
+//! `~/.duckdb/extensions/` after the first download, and from then on these tests run
+//! offline. [`spatial_extension_ready`] installs it once before any server starts.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
 
 /// A spawned server bound to an ephemeral port. Killed on drop.
@@ -57,8 +53,28 @@ fn spawn_file(file: &str, extra_args: &[&str]) -> TestServer {
     spawn_with_env(file, extra_args, &[])
 }
 
+/// Make sure DuckDB's `spatial` extension is installed before the first server
+/// starts. Done once per test run, in-process: on a cold cache that is a single
+/// download, not one per parallel server racing to write the same file. Offline
+/// with no cache, it fails once with directions instead of every test timing out.
+fn spatial_extension_ready() {
+    static READY: OnceLock<Result<(), String>> = OnceLock::new();
+    let result = READY.get_or_init(|| {
+        let conn = terrana::db::create_connection().map_err(|e| e.to_string())?;
+        terrana::db::ensure_spatial(&conn).map_err(|e| e.to_string())
+    });
+    if let Err(e) = result {
+        panic!(
+            "{e}\n\nThe integration tests need DuckDB's spatial extension. Run them once \
+             with network access to cache it in ~/.duckdb/extensions/; after that they \
+             run offline."
+        );
+    }
+}
+
 /// [`spawn_file`] with extra environment variables for the server.
 fn spawn_with_env(file: &str, extra_args: &[&str], envs: &[(&str, &str)]) -> TestServer {
+    spatial_extension_ready();
     let mut args = vec!["serve", file, "--port", "0"];
     args.extend_from_slice(extra_args);
     let mut child = Command::new(env!("CARGO_BIN_EXE_terrana"))
@@ -88,9 +104,9 @@ fn spawn_with_env(file: &str, extra_args: &[&str], envs: &[(&str, &str)]) -> Tes
         }
     });
 
-    // Allow a generous window for the one-time spatial-extension download.
+    // Ingest and index build only: `spatial_extension_ready` already fetched the extension.
     let port = rx
-        .recv_timeout(Duration::from_secs(120))
+        .recv_timeout(Duration::from_secs(60))
         .expect("server did not report a listening port within timeout");
     let server = TestServer { child, port };
 
@@ -135,7 +151,6 @@ fn get_json(server: &TestServer, path: &str) -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn health_schema_stats() {
     let s = spawn(&[]);
 
@@ -162,7 +177,6 @@ fn health_schema_stats() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_bbox_returns_rows() {
     let s = spawn(&[]);
     let rows = get_json(&s, "/query?bbox=35.0,-84.0,37.0,-81.0");
@@ -171,7 +185,6 @@ fn query_bbox_returns_rows() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_radius_sorted_by_distance() {
     let s = spawn(&[]);
     let rows = get_json(&s, "/query?lat=36.5&lon=-82.5&radius=500km");
@@ -189,7 +202,6 @@ fn query_radius_sorted_by_distance() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_nearest_limits_results() {
     let s = spawn(&[]);
     let rows = get_json(&s, "/query?lat=36.5&lon=-82.5&nearest=5");
@@ -199,7 +211,6 @@ fn query_nearest_limits_results() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_select_restricts_columns() {
     let s = spawn(&[]);
     let rows = get_json(
@@ -218,7 +229,6 @@ fn query_select_restricts_columns() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_csv_and_geojson_formats() {
     let s = spawn(&[]);
 
@@ -267,7 +277,6 @@ fn next_path(link: &str) -> String {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_pages_follow_the_link_header_through_every_row() {
     let s = spawn(&[]);
     let (all, link) = get_page(&s, "/query?bbox=35.0,-84.0,37.0,-81.0");
@@ -286,7 +295,6 @@ fn query_pages_follow_the_link_header_through_every_row() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_pages_radius_results_in_distance_order() {
     let s = spawn(&[]);
     let (all, _) = get_page(&s, "/query?lat=36.5&lon=-82.5&radius=500km");
@@ -298,7 +306,6 @@ fn query_pages_radius_results_in_distance_order() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_nearest_with_offset_returns_the_next_nearest() {
     let s = spawn(&[]);
     let (ten, _) = get_page(&s, "/query?lat=36.5&lon=-82.5&nearest=10");
@@ -312,7 +319,6 @@ fn query_nearest_with_offset_returns_the_next_nearest() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_offset_past_the_end_is_empty_and_bad_offsets_are_rejected() {
     let s = spawn(&[]);
     let (rows, link) = get_page(&s, "/query?bbox=35.0,-84.0,37.0,-81.0&offset=100000");
@@ -331,7 +337,6 @@ fn query_offset_past_the_end_is_empty_and_bad_offsets_are_rejected() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_pages_csv_with_the_same_link_header() {
     let s = spawn(&[]);
     let resp = ureq::get(s.url("/query?bbox=35.0,-84.0,37.0,-81.0&format=csv&limit=2"))
@@ -351,7 +356,6 @@ fn query_pages_csv_with_the_same_link_header() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn query_pages_aggregates_by_group() {
     let s = spawn(&[]);
     let (all, _) = get_page(&s, "/query?group_by=species&agg=count");
@@ -362,7 +366,6 @@ fn query_pages_aggregates_by_group() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn within_polygon_query() {
     let s = spawn(&[]);
     let body = std::fs::read_to_string("testdata/parks.geojson").unwrap();
@@ -378,7 +381,6 @@ fn within_polygon_query() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn geometry_area_unit_box() {
     let s = spawn(&[]);
     let req = serde_json::json!({
@@ -401,7 +403,6 @@ fn geometry_area_unit_box() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn geometry_distance_between_points() {
     let s = spawn(&[]);
     let req = serde_json::json!({
@@ -419,7 +420,6 @@ fn geometry_distance_between_points() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn geometry_buffer_area_is_sane() {
     let s = spawn(&[]);
     let req = serde_json::json!({
@@ -442,7 +442,6 @@ fn geometry_buffer_area_is_sane() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn invalid_select_column_is_rejected() {
     let s = spawn(&[]);
     // A select column with illegal characters must be rejected, not executed.
@@ -456,7 +455,6 @@ fn invalid_select_column_is_rejected() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn watch_reload_reflects_new_rows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("obs.csv");
@@ -477,7 +475,6 @@ fn watch_reload_reflects_new_rows() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn watch_reload_keeps_old_data_on_bad_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("obs.csv");
@@ -529,7 +526,6 @@ fn error_status(server: &TestServer, path: &str) -> u16 {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn where_compares_with_the_column_type() {
     let s = spawn(&[]);
     // count is BIGINT, observed_on a DATE (testdata/observations.csv).
@@ -561,7 +557,6 @@ fn where_compares_with_the_column_type() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn where_in_and_not_in_lists() {
     let s = spawn(&[]);
     assert_eq!(
@@ -578,7 +573,6 @@ fn where_in_and_not_in_lists() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn repeated_where_parameters_all_apply() {
     let s = spawn(&[]);
     // Eastern Bluebird (id 1) is research grade, so both filters together match nothing.
@@ -601,7 +595,6 @@ fn repeated_where_parameters_all_apply() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn where_null_tests() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("obs.csv");
@@ -618,7 +611,6 @@ fn where_null_tests() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [
@@ -634,7 +626,6 @@ fn where_rejects_bad_values_and_unknown_columns() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn a_token_guards_everything_but_health() {
     let s = spawn_with_env(
         "testdata/observations.csv",
@@ -682,7 +673,6 @@ fn a_token_guards_everything_but_health() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn the_token_can_come_from_a_file() {
     let dir = tempfile::tempdir().unwrap();
     let token = dir.path().join("token");
@@ -707,7 +697,6 @@ fn header_of(resp: &ureq::http::Response<ureq::Body>, name: &str) -> Option<Stri
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn cors_allows_only_the_listed_origins() {
     let s = spawn_with_env(
         "testdata/observations.csv",
@@ -752,7 +741,6 @@ fn cors_allows_only_the_listed_origins() {
 }
 
 #[test]
-#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
 fn cors_is_open_by_default_and_can_be_turned_off() {
     let open = spawn(&[]);
     let resp = ureq::get(open.url("/health"))

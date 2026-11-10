@@ -51,22 +51,21 @@ Run the same checks CI runs, and make sure they all pass:
 ```bash
 cargo fmt --all                       # format
 cargo clippy --all-targets -- -D warnings   # lint (warnings are errors)
-cargo test                            # unit tests (offline)
-cargo test -- --include-ignored       # + integration tests (needs network)
+cargo test                            # unit + integration tests
 ```
 
 Or use the [`Makefile`](Makefile) shortcuts (`make help` lists them all):
 
 ```bash
-make ci         # fmt-check + lint + unit tests (the offline gate)
-make test-all   # unit + integration tests (needs network)
+make ci         # fmt-check + lint + all tests (the CI gate)
+make test-fast  # only the tests that never need the spatial extension (offline, no cache)
 make run        # run the server against testdata/observations.csv
 ```
 
 The integration tests in [`tests/api.rs`](tests/api.rs) spawn the real binary and
-hit the HTTP endpoints. They are `#[ignore]`d by default because starting the server
-requires the DuckDB `spatial` extension to be available; run them with
-`--include-ignored` in an environment with network access.
+hit the HTTP endpoints. Starting the server needs DuckDB's `spatial` extension, which is
+downloaded once and cached in `~/.duckdb/extensions/`. Run the tests once with network
+access; after that they run offline.
 
 For changes to the **Python bindings**, build and test them with
 [uv](https://docs.astral.sh/uv/):
