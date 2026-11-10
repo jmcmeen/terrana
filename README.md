@@ -63,13 +63,14 @@ Each [release](https://github.com/jmcmeen/terrana/releases/latest) has a binary 
 
 | Platform | File |
 |---|---|
-| Linux x86_64 (glibc) | `terrana-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux arm64 (glibc) | `terrana-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64 (glibc 2.28+) | `terrana-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux arm64 (glibc 2.28+) | `terrana-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Apple Silicon | `terrana-aarch64-apple-darwin.tar.gz` |
 | macOS Intel | `terrana-x86_64-apple-darwin.tar.gz` |
 | Windows x86_64 | `terrana-x86_64-pc-windows-msvc.zip` |
 
-`pip install terrana` installs the same `terrana` command on all of these (see
+The Linux binaries need glibc 2.28 or newer: RHEL 8+, Debian 10+, Ubuntu 18.10+, Amazon
+Linux 2023. `pip install terrana` installs the same `terrana` command on all of these (see
 [Python](#python)).
 
 ### As a library dependency

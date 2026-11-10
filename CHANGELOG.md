@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm64 builds run natively on GitHub's arm64 runners. CI now builds and tests on Linux x86_64
   and arm64, macOS and Windows (#59)
 
+### Changed
+
+- The Linux release binaries are built in the manylinux 2_28 image, like the wheels, so they need
+  glibc 2.28+ (RHEL 8+, Debian 10+, Amazon Linux 2023) rather than the runner's 2.39. CI builds and
+  tests each released binary the way `publish.yml` builds it, including the macOS x86_64 cross
+  build (built, not run), and the Python bindings on arm64 Linux too. One platform's build
+  failing no longer stops the others' binaries being attached to the release (#59)
+
+### Fixed
+
+- Windows: files load. `std::fs::canonicalize` returned a verbatim `\\?\C:\...` path, which
+  DuckDB reads as a glob and can't open; the CLI now uses `dunce::canonicalize` (#59)
+
 ## [0.2.12] - 2026-11-10
 
 ### Changed

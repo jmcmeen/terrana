@@ -185,7 +185,9 @@ fn serve(
         anyhow::bail!("File not found: {}", file.display());
     }
 
-    let abs_path = std::fs::canonicalize(&file)?;
+    // On Windows, std::fs::canonicalize gives a verbatim `\\?\C:\...` path, which
+    // DuckDB reads as a glob (`?`) and can't open; dunce returns `C:\...` instead.
+    let abs_path = dunce::canonicalize(&file)?;
     let source = file.display().to_string();
 
     // Hold _tmp_dir in scope so the temp directory lives as long as the server.
