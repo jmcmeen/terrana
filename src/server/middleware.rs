@@ -85,6 +85,17 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// The warning for serving on `bind` without a token, or `None` when that's safe
+/// (a token is set, or `bind` is loopback). Shared by the CLI and the Python
+/// bindings so both say the same thing.
+pub fn public_bind_warning(bind: &str, has_token: bool) -> Option<String> {
+    (!has_token && !is_loopback(bind)).then(|| {
+        format!(
+            "serving on {bind} without a token: anyone who can reach this port can read the data"
+        )
+    })
+}
+
 /// Whether `bind` only reaches this machine: every address it resolves to is a
 /// loopback address. Unresolvable counts as not loopback.
 pub fn is_loopback(bind: &str) -> bool {
@@ -118,6 +129,13 @@ mod tests {
         assert_eq!(bearer_credentials("Basic abc"), None);
         assert_eq!(bearer_credentials("Bearer"), None);
         assert_eq!(bearer_credentials("Bearer   "), None);
+    }
+
+    #[test]
+    fn public_bind_warning_only_without_a_token_off_loopback() {
+        assert!(public_bind_warning("0.0.0.0", false).is_some());
+        assert!(public_bind_warning("0.0.0.0", true).is_none());
+        assert!(public_bind_warning("127.0.0.1", false).is_none());
     }
 
     #[test]

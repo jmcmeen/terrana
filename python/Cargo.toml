@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 description = "Python bindings for Terrana — spatial queries and geodesic geometry"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/jmcmeen/terrana"
 
 # Builds directly into the Python module `terrana`. It can take that name because
 # the engine crate it wraps is imported under the alias `terrana_core` below — a

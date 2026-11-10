@@ -201,8 +201,32 @@ pub async fn serve<A: tokio::net::ToSocketAddrs>(
     addr: A,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve_on(state, listener, shutdown).await
+}
+
+/// Like [`serve`], on a listener the caller has already bound, so a bind failure
+/// can be reported before a background thread starts (as the Python bindings'
+/// `serve_background` does). The listener must be non-blocking.
+pub async fn serve_std(
+    state: AppState,
+    listener: std::net::TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    serve_on(
+        state,
+        tokio::net::TcpListener::from_std(listener)?,
+        shutdown,
+    )
+    .await
+}
+
+async fn serve_on(
+    state: AppState,
+    listener: tokio::net::TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    let app = build_router(state);
     // The bound address, not the requested one, so `--port 0` reports its port.
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app)

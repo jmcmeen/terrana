@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python: `serve()` and `serve_background()` take `token=` and `cors_origins=`, like the CLI's
+  `TERRANA_TOKEN`/`--token-file` and `--cors-origin`, and binding a non-loopback address without
+  a token raises a `RuntimeWarning` (#50)
+
+### Fixed
+
+- The PyPI page has a project description (a Python-focused README) and links to the
+  repository, issues and changelog (#54)
+- Python: `serve_background()` raises `OSError` when its port is taken, instead of returning a
+  handle to a server that never started and printing the error to stderr (#55)
+
 ## [0.2.10] - 2026-11-10
 
 ### Added

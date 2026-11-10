@@ -6,16 +6,15 @@
 //! local item shadows a same-named dependency crate.
 
 use duckdb::Connection;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyRuntimeWarning, PyValueError};
 use pyo3::prelude::*;
 use pythonize::pythonize;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use terrana_core::config::Config;
+use terrana_core::config::{Config, CorsPolicy, Token};
 use terrana_core::db::query;
-use terrana_core::config::CorsPolicy;
-use terrana_core::server::{self, AppState};
+use terrana_core::server::{self, middleware, AppState};
 
 /// Map any displayable error (Terrana's `AppError`, pythonize failures) to a
 /// Python `RuntimeError`.
@@ -225,9 +224,21 @@ impl TerranaSession {
     /// Start the embedded HTTP server on `bind:port` and **block** until interrupted
     /// (Ctrl-C). The tokio runtime lives entirely inside this call, and the GIL is
     /// released while it runs so other Python threads keep working.
-    #[pyo3(signature = (port = 8080, bind = "127.0.0.1".to_string()))]
-    fn serve(&self, py: Python<'_>, port: u16, bind: String) -> PyResult<()> {
-        let state = self.build_state(port, &bind)?;
+    ///
+    /// `token`: require `Authorization: Bearer <token>` on every endpoint but
+    /// `/health`. `cors_origins`: browser origins allowed to call the API
+    /// (default any; `["none"]` turns CORS off). Binding a non-loopback address
+    /// without a token raises a `RuntimeWarning`.
+    #[pyo3(signature = (port = 8080, bind = "127.0.0.1".to_string(), token = None, cors_origins = None))]
+    fn serve(
+        &self,
+        py: Python<'_>,
+        port: u16,
+        bind: String,
+        token: Option<String>,
+        cors_origins: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let state = self.build_state(py, port, &bind, token, cors_origins)?;
         let addr = format!("{}:{}", bind, port);
         let result: std::io::Result<()> = py.allow_threads(move || {
             let rt = tokio::runtime::Runtime::new()?;
@@ -243,10 +254,26 @@ impl TerranaSession {
 
     /// Start the embedded HTTP server on a background thread and return immediately.
     /// The returned [`TerranaServer`] stops it via `shutdown()` or context-manager exit.
-    #[pyo3(signature = (port = 8080, bind = "127.0.0.1".to_string()))]
-    fn serve_background(&self, port: u16, bind: String) -> PyResult<TerranaServer> {
-        let state = self.build_state(port, &bind)?;
-        let addr = format!("{}:{}", bind, port);
+    /// `token` and `cors_origins` work as in [`serve`](TerranaSession::serve).
+    #[pyo3(signature = (port = 8080, bind = "127.0.0.1".to_string(), token = None, cors_origins = None))]
+    fn serve_background(
+        &self,
+        py: Python<'_>,
+        port: u16,
+        bind: String,
+        token: Option<String>,
+        cors_origins: Option<Vec<String>>,
+    ) -> PyResult<TerranaServer> {
+        let state = self.build_state(py, port, &bind, token, cors_origins)?;
+        // Bind here, not on the thread, so a taken port raises OSError instead of
+        // leaving the caller with a handle to a server that never started.
+        let listener = py
+            .allow_threads(|| {
+                let l = std::net::TcpListener::bind((bind.as_str(), port))?;
+                l.set_nonblocking(true)?;
+                Ok::<_, std::io::Error>(l)
+            })
+            .map_err(PyErr::from)?;
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let handle = std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
@@ -260,7 +287,7 @@ impl TerranaSession {
                 let shutdown = async move {
                     let _ = rx.await;
                 };
-                if let Err(e) = server::serve(state, addr, shutdown).await {
+                if let Err(e) = server::serve_std(state, listener, shutdown).await {
                     eprintln!("terrana: server error: {e}");
                 }
             });
@@ -275,7 +302,38 @@ impl TerranaSession {
 impl TerranaSession {
     /// Assemble an [`AppState`] for the embedded server from this already-ingested
     /// session — no re-ingestion, just a snapshot built from the live connection.
-    fn build_state(&self, port: u16, bind: &str) -> PyResult<AppState> {
+    /// Validates `token` and `cors_origins` as the CLI does (`ValueError` if bad),
+    /// and warns when `bind` is public and there is no token.
+    fn build_state(
+        &self,
+        py: Python<'_>,
+        port: u16,
+        bind: &str,
+        token: Option<String>,
+        cors_origins: Option<Vec<String>>,
+    ) -> PyResult<AppState> {
+        let token = match token {
+            None => None,
+            Some(t) => Some(
+                Token::new(&t).ok_or_else(|| PyValueError::new_err("token must not be empty"))?,
+            ),
+        };
+        let cors = match cors_origins {
+            None => CorsPolicy::Any,
+            // An empty list would mean "no flags" to the CLI parser, i.e. any origin:
+            // the opposite of what an empty allow-list says.
+            Some(origins) if origins.is_empty() => return Err(PyValueError::new_err(
+                "cors_origins is empty: pass None for any origin, or [\"none\"] to turn CORS off",
+            )),
+            Some(origins) => CorsPolicy::from_args(&origins).map_err(PyValueError::new_err)?,
+        };
+        // May resolve a host name: don't hold the GIL through a slow lookup.
+        let has_token = token.is_some();
+        let warning = py.allow_threads(|| middleware::public_bind_warning(bind, has_token));
+        if let Some(msg) = warning {
+            let msg = std::ffi::CString::new(format!("{msg}. Pass token=...")).map_err(pyerr)?;
+            PyErr::warn(py, &py.get_type::<PyRuntimeWarning>(), &msg, 1)?;
+        }
         let snapshot = {
             let conn = self
                 .db
@@ -300,8 +358,8 @@ impl TerranaSession {
             bind: bind.to_string(),
             watch: false,
             disk: false,
-            cors: CorsPolicy::Any,
-            token: None,
+            cors,
+            token,
         };
         Ok(AppState {
             config: Arc::new(config),
