@@ -55,12 +55,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: terrana
+          # Native arm64 runner: no cross-compiling the bundled DuckDB C++.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            artifact: terrana
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: terrana
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: terrana
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: terrana.exe
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -72,13 +79,19 @@ jobs:
           save-if: false
       - run: cargo build --release --target ${{ matrix.target }}
       - name: Package
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../terrana-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
+      # Windows users expect a .zip.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact }} -DestinationPath terrana-${{ matrix.target }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: terrana-${{ matrix.target }}
-          path: terrana-${{ matrix.target }}.tar.gz
+          path: terrana-${{ matrix.target }}.*
 
   release:
     name: Attach binaries to the release
@@ -97,7 +110,7 @@ jobs:
           # release.yml has normally created it; a hand-pushed tag hasn't.
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" artifacts/*.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" artifacts/*.tar.gz artifacts/*.zip --clobber
 
   publish-crate:
     name: Publish to crates.io

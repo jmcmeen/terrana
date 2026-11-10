@@ -64,31 +64,50 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - run: cargo test --all
       - uses: actions/cache/save@v4
         if: github.ref == 'refs/heads/main'
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
 
   build:
-    name: Build
+    name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Every platform publish.yml releases a binary for (the x86_64 macOS one is
+        # cross-compiled on macos-latest), so a release never ships an untested build.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: duckdb
+        shell: bash
+        run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - run: cargo build --release
+      # The release profile, so the binary just built is the one tested. Linux x86_64
+      # is already tested by the test job.
+      - if: matrix.os != 'ubuntu-latest'
+        run: cargo test --release
+      - uses: actions/cache/save@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - uses: actions/upload-artifact@v4
         with:
           name: terrana-${{ matrix.os }}
-          path: target/release/terrana
+          path: target/release/terrana${{ runner.os == 'Windows' && '.exe' || '' }}
 
   python:
     name: Python bindings
@@ -111,7 +130,7 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       # Single shell so the activated venv persists across build + test.
       - name: Build extension and run tests
         working-directory: python
@@ -126,4 +145,4 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}

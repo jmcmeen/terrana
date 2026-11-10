@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Release binaries for Linux arm64 (`aarch64-unknown-linux-gnu`) and Windows x86_64
+  (`x86_64-pc-windows-msvc`, a `.zip`), and a manylinux 2_28 aarch64 wheel on PyPI. Both Linux
+  arm64 builds run natively on GitHub's arm64 runners. CI now builds and tests on Linux x86_64
+  and arm64, macOS and Windows (#59)
+
 ### Changed
 
 - `cargo test` (and `make ci`) runs the integration tests, which were `#[ignore]`d because the
