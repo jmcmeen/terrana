@@ -25,6 +25,19 @@ pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> St
     )
 }
 
+/// WHERE fragment for a bounding box as plain coordinate ranges, for queries that
+/// sort the whole match (paged `/query` orders by `rowid`). Every geometry here is
+/// a point, so it selects the same rows as [`bbox_filter`], edges included. But
+/// where the R-tree path then evaluates `ST_Intersects` on every matching row
+/// before the sort (2 s for a box over 1M rows), ranges are a vectorized compare
+/// (6 ms).
+pub fn bbox_point_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
+    format!(
+        "ST_X(geom) BETWEEN {} AND {} AND ST_Y(geom) BETWEEN {} AND {}",
+        min_lon, max_lon, min_lat, max_lat
+    )
+}
+
 /// WHERE fragment for radius: bbox envelope + ST_Distance_Sphere.
 pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
     let deg_offset = radius_m / 111_000.0 * 1.5;
@@ -60,7 +73,8 @@ pub fn within_filter_geojson(geojson_str: &str) -> String {
 
 /// Execute a query with optional spatial filter, where/select/group_by/agg/limit.
 /// When `spatial_where` is provided, queries `raw_data` (has geom + R-tree index)
-/// and excludes geom from output. Otherwise queries the `data` view.
+/// and excludes geom from output. Otherwise queries the `data` view. The first page
+/// of [`query_page`].
 #[allow(clippy::too_many_arguments)]
 pub fn query(
     db: &Mutex<Connection>,
@@ -73,10 +87,70 @@ pub fn query(
     extra_select: Option<&str>,
     order_by: Option<&str>,
 ) -> Result<Vec<Value>, AppError> {
+    run_query(
+        db,
+        spatial_where,
+        where_clauses,
+        select_cols,
+        group_by,
+        agg,
+        limit,
+        None,
+        extra_select,
+        order_by,
+    )
+}
+
+/// Like [`query`], skipping the first `offset` rows of a fully ordered result (by
+/// `order_by`, then the loader's `rowid`; aggregates by the group column), so
+/// consecutive pages neither overlap nor skip rows. [`query`] skips that ordering
+/// when it isn't asked for, which spares callers that never page a sort.
+#[allow(clippy::too_many_arguments)]
+pub fn query_page(
+    db: &Mutex<Connection>,
+    spatial_where: Option<&str>,
+    where_clauses: &[(String, String)],
+    select_cols: Option<&[String]>,
+    group_by: Option<&str>,
+    agg: Option<&str>,
+    limit: usize,
+    offset: usize,
+    extra_select: Option<&str>,
+    order_by: Option<&str>,
+) -> Result<Vec<Value>, AppError> {
+    run_query(
+        db,
+        spatial_where,
+        where_clauses,
+        select_cols,
+        group_by,
+        agg,
+        limit,
+        Some(offset),
+        extra_select,
+        order_by,
+    )
+}
+
+/// Shared body of [`query`] and [`query_page`]. `offset: Some(_)` asks for a
+/// stable total order and an OFFSET; `None` keeps the caller's `order_by` only.
+#[allow(clippy::too_many_arguments)]
+fn run_query(
+    db: &Mutex<Connection>,
+    spatial_where: Option<&str>,
+    where_clauses: &[(String, String)],
+    select_cols: Option<&[String]>,
+    group_by: Option<&str>,
+    agg: Option<&str>,
+    limit: usize,
+    offset: Option<usize>,
+    extra_select: Option<&str>,
+    order_by: Option<&str>,
+) -> Result<Vec<Value>, AppError> {
     // Aggregation path
     if let (Some(gb), Some(a)) = (group_by, agg) {
         db::validate_column_name(gb)?;
-        return query_aggregate(db, spatial_where, where_clauses, gb, a, limit);
+        return query_aggregate(db, spatial_where, where_clauses, gb, a, limit, offset);
     }
 
     let table = if spatial_where.is_some() {
@@ -133,14 +207,30 @@ pub fn query(
         sql.push_str(&conditions.join(" AND "));
     }
 
-    if let Some(ob) = order_by {
-        sql.push_str(" ORDER BY ");
-        sql.push_str(ob);
+    match offset {
+        Some(off) => {
+            sql.push_str(&order_clause(order_by));
+            sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, off));
+        }
+        None => {
+            if let Some(ob) = order_by {
+                sql.push_str(" ORDER BY ");
+                sql.push_str(ob);
+            }
+            sql.push_str(&format!(" LIMIT {}", limit));
+        }
     }
 
-    sql.push_str(&format!(" LIMIT {}", limit));
-
     execute_query_to_json(db, &sql)
+}
+
+/// ORDER BY clause ending in the loader's `rowid`, so ties (and unordered queries)
+/// come back in the same order on every request.
+fn order_clause(order_by: Option<&str>) -> String {
+    match order_by {
+        Some(ob) => format!(" ORDER BY {}, rowid", ob),
+        None => " ORDER BY rowid".to_string(),
+    }
 }
 
 fn query_aggregate(
@@ -150,6 +240,7 @@ fn query_aggregate(
     group_by: &str,
     agg: &str,
     limit: usize,
+    offset: Option<usize>,
 ) -> Result<Vec<Value>, AppError> {
     let agg_expr = if agg == "count" {
         "COUNT(*) AS count".to_string()
@@ -197,7 +288,14 @@ fn query_aggregate(
     }
 
     sql.push_str(&format!(" GROUP BY \"{}\"", group_by));
-    sql.push_str(&format!(" LIMIT {}", limit));
+    match offset {
+        Some(off) => {
+            // Groups are unique, so ordering by the group column alone is stable.
+            sql.push_str(&format!(" ORDER BY \"{}\"", group_by));
+            sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, off));
+        }
+        None => sql.push_str(&format!(" LIMIT {}", limit)),
+    }
 
     execute_query_to_json(db, &sql)
 }
@@ -377,6 +475,23 @@ mod tests {
         let f = bbox_filter(35.0, -84.0, 37.0, -81.0);
         assert!(f.contains("ST_MakeEnvelope(-84, 35, -81, 37)"));
         assert!(f.starts_with("ST_Intersects(geom,"));
+    }
+
+    #[test]
+    fn bbox_point_filter_uses_x_for_lon_and_y_for_lat() {
+        assert_eq!(
+            bbox_point_filter(35.0, -84.0, 37.0, -81.0),
+            "ST_X(geom) BETWEEN -84 AND -81 AND ST_Y(geom) BETWEEN 35 AND 37"
+        );
+    }
+
+    #[test]
+    fn order_clause_ends_with_rowid() {
+        assert_eq!(order_clause(None), " ORDER BY rowid");
+        assert_eq!(
+            order_clause(Some("_distance_km ASC")),
+            " ORDER BY _distance_km ASC, rowid"
+        );
     }
 
     #[test]

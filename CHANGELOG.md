@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Paging for `GET /query`: `offset=N` skips rows, and when more rows follow the response
+  carries a `Link: <?...>; rel="next"` header with the next page's query string. Bodies are unchanged,
+  so it works the same for JSON, CSV and GeoJSON; with `nearest=K`, `offset` gives the next K
+  nearest (#42)
+
+### Changed
+
+- `GET /query` results have a fixed order: by distance where there is one, then by `rowid`;
+  aggregates by group. Before, bbox, plain and aggregate queries could come back in a
+  different order on each request. `nearest`, like `limit`, is capped at 100,000 rows per
+  response; the rest are on the next page (#42)
+- `GET /query?bbox=...` filters by coordinate ranges instead of the R-tree's `ST_Intersects`,
+  which selects the same points. With results sorted, a box covering most of a 1M-row file
+  answers in 6 ms instead of 2 s (#42)
+- The "listening on" log line reports the address the server bound, so `--port 0` (any free
+  port) shows which port it got (#43)
+
+### Fixed
+
+- Integration tests no longer fail now and then with "server did not become ready": two
+  parallel tests could be handed the same port. Each test server now binds port 0 and the
+  test reads the bound port from its log (#43)
+
 ## [0.2.7] - 2026-11-08
 
 ### Changed

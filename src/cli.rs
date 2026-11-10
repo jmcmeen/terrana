@@ -183,7 +183,6 @@ fn serve(
     };
 
     let addr = format!("{}:{}", bind, port);
-    info!("listening on {}", addr);
 
     // Build the runtime here (rather than via `#[tokio::main]`) so this same fn can
     // be driven from the Python console script, which is not an async context.

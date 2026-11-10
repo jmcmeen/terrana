@@ -295,6 +295,7 @@ Body: GeoJSON `Polygon`, `MultiPolygon`, `Feature`, or `FeatureCollection`. Uses
 | `group_by` | Group column | `group_by=species` |
 | `agg` | Aggregation | `agg=count` or `agg=sum:count` |
 | `limit` | Max rows (default 1000, hard cap 100000) | `limit=500` |
+| `offset` | Rows to skip; a `Link: <...>; rel="next"` header points at the next page. Results are ordered by distance (if any), then `rowid`; aggregates by group | `offset=1000` |
 | `format` | Output format | `format=json` \| `format=csv` \| `format=geojson` |
 
 ### Geometry Endpoints

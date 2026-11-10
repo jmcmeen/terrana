@@ -11,8 +11,9 @@
 //! cargo test --test api -- --include-ignored
 //! ```
 
-use std::net::TcpListener;
-use std::process::{Child, Command};
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// A spawned server bound to an ephemeral port. Killed on drop.
@@ -43,47 +44,61 @@ fn content_type(resp: &ureq::http::Response<ureq::Body>) -> String {
         .to_string()
 }
 
-/// Grab a free TCP port by binding to :0 and releasing it.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// Spawn `terrana serve testdata/observations.csv` and wait for `/health` to answer.
 fn spawn(extra_args: &[&str]) -> TestServer {
     spawn_file("testdata/observations.csv", extra_args)
 }
 
-/// Spawn `terrana serve <file>` and wait for `/health` to answer.
+/// Spawn `terrana serve <file> --port 0` and wait for `/health` to answer.
+///
+/// The OS picks the port when the server binds, and the server logs the address it
+/// bound, so parallel tests can never be handed the same port.
 fn spawn_file(file: &str, extra_args: &[&str]) -> TestServer {
-    let port = free_port();
-    let port_str = port.to_string();
-    let mut args = vec!["serve", file, "--port", &port_str];
+    let mut args = vec!["serve", file, "--port", "0"];
     args.extend_from_slice(extra_args);
-
-    let child = Command::new(env!("CARGO_BIN_EXE_terrana"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_terrana"))
         .args(&args)
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
         .spawn()
         .expect("failed to spawn terrana binary");
+
+    // Read the log (stdout) on a thread: it must keep draining, or the server
+    // blocks on a full pipe. Echo it for test output and send back the bound port.
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            println!("{line}");
+            if let Some(port) = line
+                .split("listening on ")
+                .nth(1)
+                .and_then(|addr| addr.trim().rsplit(':').next())
+                .and_then(|p| p.parse::<u16>().ok())
+            {
+                let _ = tx.send(port);
+            }
+        }
+    });
+
+    // Allow a generous window for the one-time spatial-extension download.
+    let port = rx
+        .recv_timeout(Duration::from_secs(120))
+        .expect("server did not report a listening port within timeout");
     let server = TestServer { child, port };
 
-    // Connection is refused until the server binds, so failed calls return fast.
-    // Allow a generous window for the one-time spatial-extension download.
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         assert!(
             Instant::now() < deadline,
-            "server did not become ready within timeout"
+            "server did not answer /health within timeout"
         );
         if let Ok(resp) = ureq::get(server.url("/health")).call() {
             if resp.status().as_u16() == 200 {
                 return server;
             }
         }
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -214,6 +229,129 @@ fn query_csv_and_geojson_formats() {
     let fc: serde_json::Value = geo.body_mut().read_json().unwrap();
     assert_eq!(fc["type"], "FeatureCollection");
     assert!(fc["features"].is_array());
+}
+
+/// GET helper returning the parsed JSON body and the `Link` header (if any).
+fn get_page(server: &TestServer, path: &str) -> (Vec<serde_json::Value>, Option<String>) {
+    let mut resp = ureq::get(server.url(path))
+        .call()
+        .unwrap_or_else(|e| panic!("GET {path} failed: {e}"));
+    let link = resp
+        .headers()
+        .get(ureq::http::header::LINK)
+        .map(|v| v.to_str().unwrap().to_string());
+    let rows: serde_json::Value = resp.body_mut().read_json().expect("response was not JSON");
+    (
+        rows.as_array().expect("expected a JSON array").clone(),
+        link,
+    )
+}
+
+/// The path a `Link: <?query>; rel="next"` header points at, resolved against
+/// `/query` (the target is a relative reference to the request's own path).
+fn next_path(link: &str) -> String {
+    assert!(link.ends_with("; rel=\"next\""), "unexpected Link: {link}");
+    let target = link.trim_start_matches('<').split('>').next().unwrap();
+    assert!(
+        target.starts_with('?'),
+        "expected a relative ?query target: {link}"
+    );
+    format!("/query{target}")
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_pages_follow_the_link_header_through_every_row() {
+    let s = spawn(&[]);
+    let (all, link) = get_page(&s, "/query?bbox=35.0,-84.0,37.0,-81.0");
+    assert!(link.is_none(), "one page holds everything: no next link");
+    assert!(all.len() > 7, "test data should span several pages of 3");
+
+    let mut paged = Vec::new();
+    let mut path = Some("/query?bbox=35.0,-84.0,37.0,-81.0&limit=3".to_string());
+    while let Some(p) = path {
+        let (rows, link) = get_page(&s, &p);
+        assert!(rows.len() <= 3);
+        paged.extend(rows);
+        path = link.map(|l| next_path(&l));
+    }
+    assert_eq!(paged, all, "pages must cover every row once, in order");
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_pages_radius_results_in_distance_order() {
+    let s = spawn(&[]);
+    let (all, _) = get_page(&s, "/query?lat=36.5&lon=-82.5&radius=500km");
+    assert!(all.len() >= 8, "test data should have 8 rows within 500 km");
+    let (first, link) = get_page(&s, "/query?lat=36.5&lon=-82.5&radius=500km&limit=4");
+    let (second, _) = get_page(&s, &next_path(&link.expect("more rows follow")));
+    assert_eq!(first, all[..4]);
+    assert_eq!(second, all[4..8]);
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_nearest_with_offset_returns_the_next_nearest() {
+    let s = spawn(&[]);
+    let (ten, _) = get_page(&s, "/query?lat=36.5&lon=-82.5&nearest=10");
+    assert_eq!(ten.len(), 10, "test data should have 10 rows");
+    let (next, link) = get_page(&s, "/query?lat=36.5&lon=-82.5&nearest=5&offset=5");
+    assert_eq!(next, ten[5..10]);
+    assert_eq!(
+        next_path(&link.expect("more rows follow")),
+        "/query?lat=36.5&lon=-82.5&nearest=5&offset=10"
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_offset_past_the_end_is_empty_and_bad_offsets_are_rejected() {
+    let s = spawn(&[]);
+    let (rows, link) = get_page(&s, "/query?bbox=35.0,-84.0,37.0,-81.0&offset=100000");
+    assert!(rows.is_empty());
+    assert!(link.is_none());
+
+    for bad in ["-1", "ten", "1.5"] {
+        let err = ureq::get(s.url(&format!("/query?offset={bad}")))
+            .call()
+            .expect_err("expected a 400 error");
+        match err {
+            ureq::Error::StatusCode(code) => assert_eq!(code, 400, "offset={bad}"),
+            other => panic!("expected HTTP status error, got {other}"),
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_pages_csv_with_the_same_link_header() {
+    let s = spawn(&[]);
+    let resp = ureq::get(s.url("/query?bbox=35.0,-84.0,37.0,-81.0&format=csv&limit=2"))
+        .call()
+        .unwrap();
+    let link = resp
+        .headers()
+        .get(ureq::http::header::LINK)
+        .expect("more rows follow")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        next_path(&link),
+        "/query?bbox=35.0,-84.0,37.0,-81.0&format=csv&limit=2&offset=2"
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn query_pages_aggregates_by_group() {
+    let s = spawn(&[]);
+    let (all, _) = get_page(&s, "/query?group_by=species&agg=count");
+    assert!(all.len() >= 4, "test data should have 4 species");
+    let (first, link) = get_page(&s, "/query?group_by=species&agg=count&limit=2");
+    let (second, _) = get_page(&s, &next_path(&link.expect("more groups follow")));
+    assert_eq!([first, second].concat(), all[..4]);
 }
 
 #[test]
