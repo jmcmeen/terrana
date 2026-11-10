@@ -346,6 +346,23 @@ server.shutdown()       # stops the server and joins the thread (idempotent)
 
 The tokio runtime lives entirely inside a Rust thread, so serving never blocks Python's GIL.
 
+`serve` and `serve_background` take the same access controls as the command line (see
+[Access control](#access-control)):
+
+```python
+session.serve_background(
+    port=8080,
+    bind="0.0.0.0",
+    token=os.environ.get("TERRANA_TOKEN") or None,  # every endpoint but /health needs it
+    cors_origins=["https://maps.example.org"],    # default: any origin; ["none"] turns CORS off
+)
+```
+
+An empty token, an empty `cors_origins` list or a malformed origin raises `ValueError`, and a
+port that's already taken raises `OSError`. Binding a non-loopback address without a token
+raises a `RuntimeWarning`. The embedded server doesn't read `TERRANA_TOKEN`
+itself; pass the token explicitly.
+
 ## Docker
 
 ```bash

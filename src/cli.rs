@@ -162,12 +162,8 @@ fn serve(
     cors: CorsPolicy,
     token: Option<Token>,
 ) -> anyhow::Result<()> {
-    if token.is_none() && !middleware::is_loopback(&bind) {
-        warn!(
-            "binding {} without a token: anyone who can reach this port can read the data. \
-             Set TERRANA_TOKEN or --token-file",
-            bind
-        );
+    if let Some(msg) = middleware::public_bind_warning(&bind, token.is_some()) {
+        warn!("{msg}. Set TERRANA_TOKEN or --token-file");
     }
     let config = Config {
         file: file.clone(),

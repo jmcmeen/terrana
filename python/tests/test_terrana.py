@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -123,6 +124,89 @@ def test_serve_background_context_manager(session):
     # Server is shut down on context exit — the port should refuse connections.
     with pytest.raises(Exception):
         _get(port, "/health", 1)
+
+
+def _wait_healthy(port):
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            with _get(port, "/health", 1) as r:
+                if r.status == 200:
+                    return
+        except Exception:
+            pass
+        time.sleep(0.3)
+    raise AssertionError("embedded server did not become healthy")
+
+
+def _status(port, path, headers=None, method="GET"):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", headers=headers or {}, method=method
+    )
+    # Headers come back as an email.message.Message: .get() ignores case.
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.headers
+    except urllib.error.HTTPError as e:
+        e.close()
+        return e.code, e.headers
+
+
+def test_serve_background_with_a_token(session):
+    port = _free_port()
+    with session.serve_background(port=port, token="s3cret"):
+        _wait_healthy(port)  # /health needs no token
+        assert _status(port, "/schema")[0] == 401
+        assert _status(port, "/schema", {"Authorization": "Bearer nope"})[0] == 401
+        assert _status(port, "/schema", {"Authorization": "Bearer s3cret"})[0] == 200
+
+
+def test_serve_background_with_cors_origins(session):
+    port = _free_port()
+    with session.serve_background(port=port, cors_origins=["https://maps.example.org"]):
+        _wait_healthy(port)
+        _, allowed = _status(port, "/health", {"Origin": "https://maps.example.org"})
+        assert allowed.get("access-control-allow-origin") == "https://maps.example.org"
+        _, other = _status(port, "/health", {"Origin": "https://other.example"})
+        assert other.get("access-control-allow-origin") is None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"token": ""},
+        {"token": "   "},
+        {"cors_origins": ["maps.example.org"]},
+        {"cors_origins": []},
+    ],
+)
+def test_serve_background_rejects_bad_settings(session, kwargs):
+    with pytest.raises(ValueError):
+        session.serve_background(port=_free_port(), **kwargs)
+
+
+def test_a_public_bind_without_a_token_warns(session):
+    port = _free_port()
+    with pytest.warns(RuntimeWarning, match="without a token"):
+        server = session.serve_background(port=port, bind="0.0.0.0")
+    server.shutdown()
+
+
+def test_a_public_bind_with_a_token_does_not_warn(session, recwarn):
+    server = session.serve_background(port=_free_port(), bind="0.0.0.0", token="s3cret")
+    server.shutdown()
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+
+
+def test_serve_background_raises_when_the_port_is_taken(session):
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen()
+    try:
+        with pytest.raises(OSError):
+            session.serve_background(port=taken.getsockname()[1])
+    finally:
+        taken.close()
 
 
 def test_serve_background_explicit_shutdown(session):
