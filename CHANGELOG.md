@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Richer `where` filters on `GET /query`: `col:ne:`, `gt`, `gte`, `lt`, `lte`,
+  `col:between:lo|hi`, `col:in:a|b|c`, `col:nin:a|b|c`, `col:isnull` and `col:notnull`, beside
+  the existing `col:value` (also `col:eq:value`). Numbers, booleans, dates and times compare as
+  their column's type; a value that isn't valid for its column is a 400 (#45)
 - Paging for `GET /query`: `offset=N` skips rows, and when more rows follow the response
   carries a `Link: <?...>; rel="next"` header with the next page's query string. Bodies are unchanged,
   so it works the same for JSON, CSV and GeoJSON; with `nearest=K`, `offset` gives the next K
@@ -18,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `where=col:value` on a numeric, boolean, date or time column compares as that type instead
+  of as text, so `latitude:36.54` matches `36.5400` and `count:many` is a 400 rather than no
+  rows. Text and other columns still compare as text (#45)
+- A `where` value that starts with an operator word and a colon (`in:`, `gt:`, ...), or is
+  exactly `isnull` or `notnull`, is now read as that operator; write `col:eq:in:progress` to
+  match such text. A clause without a colon is a 400 instead of being ignored (#45)
+- Library: `terrana::query` takes `where` conditions as `db::filter::Condition`s, built by
+  `db::filter::to_conditions`, instead of `(column, value)` pairs (#45)
 - `GET /query` results have a fixed order: by distance where there is one, then by `rowid`;
   aggregates by group. Before, bbox, plain and aggregate queries could come back in a
   different order on each request. `nearest`, like `limit`, is capped at 100,000 rows per
@@ -30,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Repeated `where` parameters all apply; only the last one did (#46)
+- An unknown column in `where` is a 400 naming it, instead of a 500 that showed the SQL (#47)
 - Integration tests no longer fail now and then with "server did not become ready": two
   parallel tests could be handed the same port. Each test server now binds port 0 and the
   test reads the bound port from its log (#43)

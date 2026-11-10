@@ -115,12 +115,36 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 | Param | Example | Description |
 |---|---|---|
 | `select` | `select=species,observed_on` | Column allowlist |
-| `where` | `where=quality_grade:research` | Equality filter (repeatable) |
+| `where` | `where=count:gte:5` | Filters: equality, comparisons, ranges, lists, null tests (repeatable; see below) |
 | `group_by` | `group_by=species` | Group column |
 | `agg` | `agg=count` or `agg=sum:count` | Aggregation |
 | `limit` | `limit=500` | Max rows (default 1000, cap 100000) |
 | `offset` | `offset=1000` | Rows to skip, for paging (see below) |
 | `format` | `format=json\|csv\|geojson` | Output format |
+
+### Filtering
+
+`where` takes comma-separated clauses, and you can repeat it; every clause must match.
+Numbers, booleans, dates and times compare as their column's type (see `/schema`); other
+columns compare as text. Column names match whatever their case:
+
+| Clause | Matches |
+|---|---|
+| `col:value` or `col:eq:value` | equal |
+| `col:ne:value` | not equal |
+| `col:gt:value`, `gte`, `lt`, `lte` | greater, at least, less, at most |
+| `col:between:lo\|hi` | `lo` to `hi`, inclusive |
+| `col:in:a\|b\|c`, `col:nin:a\|b\|c` | in the list, not in it |
+| `col:isnull`, `col:notnull` | empty, not empty |
+
+```
+curl "localhost:8080/query?where=count:gte:5,observed_on:between:2024-03-15|2024-03-20"
+curl "localhost:8080/query?where=species:in:Barred%20Owl|Black%20Bear&where=quality_grade:research"
+```
+
+A value that isn't valid for its column (`count:gt:many`) or an unknown column is a 400. As in
+SQL, `ne` and `nin` don't match empty values. To match a value that looks like an operator,
+use `eq`: `note:eq:gt:5`. Values can't contain a comma, nor `|` inside a list.
 
 ### Paging
 

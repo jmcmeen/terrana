@@ -501,3 +501,127 @@ fn watch_reload_keeps_old_data_on_bad_file() {
     let got = wait_for_row_count(&s, 3, Duration::from_secs(30));
     assert_eq!(got, 3, "watcher should recover and reload a good file");
 }
+
+/// The `id`s a `/query` returns, in order.
+fn ids(server: &TestServer, path: &str) -> Vec<i64> {
+    get_json(server, path)
+        .as_array()
+        .expect("expected a JSON array")
+        .iter()
+        .map(|r| r["id"].as_i64().expect("each row has an id"))
+        .collect()
+}
+
+/// The HTTP status of a request expected to fail.
+fn error_status(server: &TestServer, path: &str) -> u16 {
+    match ureq::get(server.url(path)).call() {
+        Err(ureq::Error::StatusCode(code)) => code,
+        Ok(_) => panic!("GET {path} should have failed"),
+        Err(other) => panic!("expected HTTP status error, got {other}"),
+    }
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn where_compares_with_the_column_type() {
+    let s = spawn(&[]);
+    // count is BIGINT, observed_on a DATE (testdata/observations.csv).
+    assert_eq!(ids(&s, "/query?where=count:gte:6&select=id"), [5, 13, 15]);
+    assert_eq!(ids(&s, "/query?where=count:gt:7&select=id"), [5]);
+    assert_eq!(
+        ids(&s, "/query?where=count:between:6|7&select=id"),
+        [13, 15]
+    );
+    assert_eq!(
+        ids(&s, "/query?where=observed_on:gte:2024-03-24&select=id"),
+        [19, 20]
+    );
+    assert_eq!(
+        ids(&s, "/query?where=observed_on:lt:2024-03-16&select=id"),
+        [1, 2]
+    );
+    // Column names match whatever their case, as in DuckDB.
+    assert_eq!(ids(&s, "/query?where=COUNT:gte:6&select=id"), [5, 13, 15]);
+    // The original column:value form still matches.
+    assert_eq!(ids(&s, "/query?where=count:8&select=id"), [5]);
+    assert_eq!(
+        ids(
+            &s,
+            "/query?where=count:ne:1,count:ne:2,count:lt:4&select=id"
+        ),
+        [1, 18]
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn where_in_and_not_in_lists() {
+    let s = spawn(&[]);
+    assert_eq!(
+        ids(
+            &s,
+            "/query?where=species:in:Barred%20Owl|Black%20Bear&select=id"
+        ),
+        [8, 9]
+    );
+    let casual_or_needs_id = ids(&s, "/query?where=quality_grade:nin:research&select=id");
+    let research = ids(&s, "/query?where=quality_grade:research&select=id");
+    assert_eq!(casual_or_needs_id.len() + research.len(), 20);
+    assert!(casual_or_needs_id.iter().all(|i| !research.contains(i)));
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn repeated_where_parameters_all_apply() {
+    let s = spawn(&[]);
+    // Eastern Bluebird (id 1) is research grade, so both filters together match nothing.
+    assert_eq!(
+        ids(&s, "/query?where=species:Eastern%20Bluebird&select=id"),
+        [1]
+    );
+    assert!(ids(
+        &s,
+        "/query?where=quality_grade:casual&where=species:Eastern%20Bluebird&select=id"
+    )
+    .is_empty());
+    assert_eq!(
+        ids(
+            &s,
+            "/query?where=quality_grade:research&where=count:gte:6&select=id"
+        ),
+        [5, 15]
+    );
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn where_null_tests() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "id,latitude,longitude,count\n1,36.5,-82.5,3\n2,36.6,-82.4,\n3,36.7,-82.3,5\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(ids(&s, "/query?where=count:isnull&select=id"), [2]);
+    assert_eq!(ids(&s, "/query?where=count:notnull&select=id"), [1, 3]);
+    // Like SQL, ne doesn't match nulls.
+    assert_eq!(ids(&s, "/query?where=count:ne:3&select=id"), [3]);
+}
+
+#[test]
+#[ignore = "requires network for the DuckDB spatial extension; run with --include-ignored"]
+fn where_rejects_bad_values_and_unknown_columns() {
+    let s = spawn(&[]);
+    for path in [
+        "/query?where=count:gt:many",
+        "/query?where=observed_on:gte:not-a-date",
+        "/query?where=count:between:5",
+        "/query?where=nosuch:1",
+        "/query?bbox=35.0,-84.0,37.0,-81.0&where=nosuch:1",
+        "/query?group_by=species&agg=count&where=nosuch:1",
+    ] {
+        assert_eq!(error_status(&s, path), 400, "{path}");
+    }
+}

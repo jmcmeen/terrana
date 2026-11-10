@@ -2,6 +2,7 @@
 //! plus the shared `select`/`where`/`group_by`/`agg`/`limit`/`format` parameters.
 
 use crate::db;
+use crate::db::filter;
 use crate::db::query::{DEFAULT_LIMIT, MAX_RESULT_LIMIT};
 use crate::error::AppError;
 use crate::output;
@@ -20,8 +21,6 @@ pub struct QueryParams {
     pub bbox: Option<String>,
     pub nearest: Option<usize>,
     pub select: Option<String>,
-    #[serde(rename = "where")]
-    pub where_filter: Option<String>,
     pub group_by: Option<String>,
     pub agg: Option<String>,
     pub limit: Option<usize>,
@@ -36,13 +35,28 @@ pub struct QueryParams {
 pub async fn query(
     State(state): State<AppState>,
     RawQuery(raw_query): RawQuery,
-    Query(params): Query<HashMap<String, String>>,
+    Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
+    // Every `where` is kept (they AND together); other repeated keys keep the last.
+    let filters = filter::parse_where(
+        pairs
+            .iter()
+            .filter(|(k, _)| k == "where")
+            .map(|(_, v)| v.as_str()),
+    )?;
+    let params: HashMap<String, String> = pairs.into_iter().collect();
     let qp = parse_query_params(&params)?;
     let offset = parse_offset(params.get("offset"))?;
     let limit = qp.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULT_LIMIT);
     let format = qp.format.as_deref().unwrap_or("json");
-    let where_clauses = parse_where_clauses(qp.where_filter.as_deref());
+    let snapshot = state.snapshot();
+    let columns: Vec<(&str, &str)> = snapshot
+        .schema
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.dtype.as_str()))
+        .collect();
+    let conditions = filter::to_conditions(&filters, &columns, &state.db)?;
     let select_cols = parse_select(qp.select.as_deref());
 
     // (spatial filter, extra select, order by, page size) for each kind of query.
@@ -78,7 +92,7 @@ pub async fn query(
     let mut rows = db::query::query_page(
         &state.db,
         spatial.as_deref(),
-        &where_clauses,
+        &conditions,
         select_cols.as_deref(),
         qp.group_by.as_deref(),
         qp.agg.as_deref(),
@@ -181,7 +195,6 @@ fn parse_query_params(params: &HashMap<String, String>) -> Result<QueryParams, A
         bbox: params.get("bbox").cloned(),
         nearest: params.get("nearest").and_then(|v| v.parse().ok()),
         select: params.get("select").cloned(),
-        where_filter: params.get("where").cloned(),
         group_by: params.get("group_by").cloned(),
         agg: params.get("agg").cloned(),
         limit: params.get("limit").and_then(|v| v.parse().ok()),
@@ -244,20 +257,6 @@ fn parse_radius(s: &str) -> Result<f64, AppError> {
     })
 }
 
-fn parse_where_clauses(filter: Option<&str>) -> Vec<(String, String)> {
-    let Some(f) = filter else { return vec![] };
-    f.split(',')
-        .filter_map(|clause| {
-            let parts: Vec<&str> = clause.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                Some((parts[0].to_string(), parts[1].to_string()))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 fn parse_select(select: Option<&str>) -> Option<Vec<String>> {
     select.map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
 }
@@ -290,19 +289,6 @@ mod tests {
         assert_eq!(parse_radius("1mi").unwrap(), 1609.344);
         assert_eq!(parse_radius("100").unwrap(), 100.0);
         assert!(parse_radius("abc").is_err());
-    }
-
-    #[test]
-    fn where_clauses_split_on_colon() {
-        let clauses = parse_where_clauses(Some("quality_grade:research,species:Bombus"));
-        assert_eq!(
-            clauses,
-            vec![
-                ("quality_grade".to_string(), "research".to_string()),
-                ("species".to_string(), "Bombus".to_string()),
-            ]
-        );
-        assert!(parse_where_clauses(None).is_empty());
     }
 
     #[test]
