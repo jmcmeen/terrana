@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An optional bearer token: set `TERRANA_TOKEN` or `--token-file <path>`, and every endpoint but
+  `/health` needs `Authorization: Bearer <token>` (401 otherwise). Binding a non-loopback
+  address without one logs a warning. `docker-compose.yml` passes `TERRANA_TOKEN` through; an
+  empty value counts as no token (#49)
+- `--cors-origin <origin>` (repeatable) limits CORS to the listed origins, which may then send
+  `Authorization` and read `Link`; `--cors-origin none` turns CORS off. The default is still any
+  origin, and now lets browsers send `Authorization` too (#49)
+
 ## [0.2.8] - 2026-11-10
 
 ### Added
