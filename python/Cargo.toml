@@ -1,6 +1,6 @@
 [package]
 name = "terrana-py"
-version = "0.2.11"
+version = "0.2.12"
 edition = "2021"
 publish = false
 description = "Python bindings for Terrana — spatial queries and geodesic geometry"
