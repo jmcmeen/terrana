@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The PyPI page has a project description (a Python-focused README) and links to the
+  repository, issues and changelog (#54)
 - Python: `serve_background()` raises `OSError` when its port is taken, instead of returning a
   handle to a server that never started and printing the error to stderr (#55)
 
