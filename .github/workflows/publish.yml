@@ -92,9 +92,13 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: terrana
+            macos: "11.0"
+          # DuckDB 2.0 needs macOS 10.13 (aligned deallocation); set it rather than
+          # rely on a default.
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: terrana
+            macos: "10.13"
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: terrana.exe
@@ -108,6 +112,8 @@ jobs:
         with:
           save-if: false
       - run: cargo build --release --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
       - name: Package
         if: runner.os != 'Windows'
         run: |

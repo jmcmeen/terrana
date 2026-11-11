@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The macOS x86_64 wheel builds again, so every wheel reaches PyPI: 0.3.0's PyPI upload was skipped
+  because that wheel failed. DuckDB 2.0 uses aligned deallocation, which needs macOS 10.13, and
+  maturin's x86_64 default was 10.12. The macOS x86_64 wheel and binary now target 10.13 (arm64
+  stays at 11.0), and CI builds that wheel too (#69)
+
 > **Radius and nearest results were wrong in every earlier release.** Distances were computed
 > with latitude and longitude swapped, so `GET /query` with `radius=` or `nearest=`, the Python
 > `query_radius()` and `query_nearest()`, and every `_distance_km` value returned the wrong rows
