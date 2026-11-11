@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A latitude or longitude value that isn't a number ("NA", a typo) no longer stops
   `terrana serve` from starting. The column is read as numbers and that row is left out, as
   one with a blank coordinate is; the log names the column, the number of such rows and an
-  example. A `--lat`/`--lon` written in another case than the header still works (#76)
+  example. A `--lat`/`--lon` written in another case than the header still works, and a
+  header-only CSV serves no rows instead of failing the same way (#76)
 
 ## [0.3.2] - 2026-11-11
 

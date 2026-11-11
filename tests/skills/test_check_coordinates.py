@@ -183,19 +183,12 @@ def test_a_bbox_across_the_antimeridian(run_skill, tmp_path):
     assert summary["examples"] == {"outside_bbox": [3]}
 
 
-def test_an_empty_dataset_fails():
-    # Checked against a stand-in server: terrana can't load a header-only CSV yet (#76).
-    class Empty:
-        def get(self, path):
-            return {"lat_column": "lat", "lon_column": "lon", "row_count": 0, "source": "x"}
-
-        def rows(self, params):
-            return iter([])
-
-    module = _load_script("check-coordinates", "check_coordinates")
-    report = module.check(Empty(), None, 0.0, 5)
-    assert report["passed"] is False
-    assert report["reason"] == "the dataset has no rows"
+def test_an_empty_dataset_fails(run_skill, tmp_path):
+    (tmp_path / "empty.csv").write_text("name,lat,lon\n")
+    code, summary = run_skill("check-coordinates", "check_coordinates", "empty.csv", cwd=tmp_path)
+    assert code == 2, summary
+    assert summary["passed"] is False
+    assert summary["reason"] == "the dataset has no rows"
 
 
 def test_runs_against_a_running_server(run_skill, running_server, mixed, tmp_path):

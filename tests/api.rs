@@ -645,6 +645,17 @@ fn coordinates_that_arent_numbers_dont_stop_the_server() {
 }
 
 #[test]
+fn a_header_only_csv_serves_no_rows() {
+    // Every column of a header-only CSV is read as text, coordinates included.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.csv");
+    std::fs::write(&path, "id,latitude,longitude\n").unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(get_json(&s, "/stats")["row_count"], 0);
+    assert_eq!(get_json(&s, "/query"), serde_json::json!([]));
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [
