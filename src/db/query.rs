@@ -39,19 +39,41 @@ pub fn bbox_point_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64)
     )
 }
 
-/// WHERE fragment for radius: bbox envelope + ST_Distance_Sphere.
+/// WHERE fragment for radius: an R-tree bounding box to narrow the search, then the
+/// exact `ST_Distance_Sphere` test.
+///
+/// A degree of longitude shrinks with latitude, so the box's longitude half-width is
+/// widened by 1/cos of the farthest latitude the circle reaches. Where the box can't
+/// bound the circle (it would reach a pole, or cross the ±180° meridian), there is
+/// no box, only the distance test.
 pub fn radius_filter(lat: f64, lon: f64, radius_m: f64) -> String {
-    let deg_offset = radius_m / 111_000.0 * 1.5;
-    let bbox = bbox_filter(
-        lat - deg_offset,
-        lon - deg_offset,
-        lat + deg_offset,
-        lon + deg_offset,
+    let distance = format!(
+        "ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
+        lon, lat, radius_m
     );
-    format!(
-        "{} AND ST_Distance_Sphere(geom, ST_Point({}, {})) <= {}",
-        bbox, lon, lat, radius_m
-    )
+    match radius_box(lat, lon, radius_m) {
+        Some((min_lat, min_lon, max_lat, max_lon)) => format!(
+            "{} AND {}",
+            bbox_filter(min_lat, min_lon, max_lat, max_lon),
+            distance
+        ),
+        None => distance,
+    }
+}
+
+/// The (min_lat, min_lon, max_lat, max_lon) box around a circle of `radius_m`, with a
+/// 1.5× margin, or `None` where a latitude/longitude box can't bound it.
+fn radius_box(lat: f64, lon: f64, radius_m: f64) -> Option<(f64, f64, f64, f64)> {
+    let dlat = radius_m / 111_000.0 * 1.5;
+    let far_lat = lat.abs() + dlat;
+    if far_lat >= 89.0 {
+        return None;
+    }
+    let dlon = dlat / far_lat.to_radians().cos();
+    if lon - dlon < -180.0 || lon + dlon > 180.0 {
+        return None;
+    }
+    Some((lat - dlat, lon - dlon, lat + dlat, lon + dlon))
 }
 
 /// SELECT expression for distance in km (haversine via ST_Distance_Sphere).
@@ -460,6 +482,26 @@ mod tests {
             order_clause(Some("_distance_km ASC")),
             " ORDER BY _distance_km ASC, rowid"
         );
+    }
+
+    #[test]
+    fn radius_box_widens_longitude_with_latitude() {
+        // At the equator the box is square.
+        let (_, min_lon, _, max_lon) = radius_box(0.0, 10.0, 10_000.0).unwrap();
+        assert!((max_lon - min_lon - 2.0 * 10_000.0 / 111_000.0 * 1.5).abs() < 1e-3);
+        // At 60°N a degree of longitude is about 55.6 km: the box must reach past 10 km east.
+        let (_, _, _, max_lon) = radius_box(60.0, 10.0, 10_000.0).unwrap();
+        let east_km = (max_lon - 10.0) * 111.32 * 60f64.to_radians().cos();
+        assert!(east_km > 10.0, "box reaches only {east_km} km east");
+    }
+
+    #[test]
+    fn no_box_near_a_pole_or_across_the_antimeridian() {
+        assert!(radius_box(88.9, 0.0, 50_000.0).is_none());
+        assert!(radius_box(10.0, 179.95, 10_000.0).is_none());
+        assert!(radius_box(10.0, -179.95, 10_000.0).is_none());
+        assert!(!radius_filter(10.0, 179.95, 10_000.0).contains("ST_Intersects"));
+        assert!(radius_filter(36.5, -82.5, 10_000.0).contains("ST_Intersects"));
     }
 
     #[test]

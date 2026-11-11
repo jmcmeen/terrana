@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Radius and nearest results were wrong in every earlier release.** Distances were computed
+> with latitude and longitude swapped, so `GET /query` with `radius=` or `nearest=`, the Python
+> `query_radius()` and `query_nearest()`, and every `_distance_km` value returned the wrong rows
+> and the wrong distances. For example, a 6.08 km radius on the bundled test data returned 14
+> rows where 4 are within range. If you used radius or nearest results, or `_distance_km`, from
+> an earlier version, rerun those queries on this release. Bounding-box (`bbox=`),
+> point-in-polygon (`/query/within`) and `/geometry/*` results were not affected. Details:
+> [#62](https://github.com/jmcmeen/terrana/issues/62).
+
+### Added
+
+- Release binaries for Linux arm64 (`aarch64-unknown-linux-gnu`) and Windows x86_64
+  (`x86_64-pc-windows-msvc`, a `.zip`), and a manylinux 2_28 aarch64 wheel on PyPI. Both Linux
+  arm64 builds run natively on GitHub's arm64 runners. CI now builds and tests on Linux x86_64
+  and arm64, macOS and Windows (#59)
+
+### Changed
+
+- CI can be run by hand on any branch (`gh workflow run ci.yml --ref <branch>`), so stacked PRs
+  above the bottom one get CI before they merge; such runs never release (#67)
+- DuckDB 2.0 (`duckdb` 1.20000), in the crate and the Python bindings. It no longer builds with the
+  `zip` crate, which had four open security advisories (one critical) that couldn't be fixed on
+  DuckDB 1.x. The spatial extension is downloaded again for 2.0 on first run (#52)
+- The Linux release binaries are built in the manylinux 2_28 image, like the wheels, so they need
+  glibc 2.28+ (RHEL 8+, Debian 10+, Amazon Linux 2023) rather than the runner's 2.39. CI builds and
+  tests each released binary the way `publish.yml` builds it, including the macOS x86_64 cross
+  build (built, not run), and the Python bindings on arm64 Linux too. One platform's build
+  failing no longer stops the others' binaries being attached to the release (#59)
+
+### Fixed
+
+- **Radius and nearest queries returned the wrong rows and distances.** DuckDB 1.x's
+  `ST_Distance_Sphere` reads a point as (latitude, longitude), but terrana builds points as
+  `ST_Point(longitude, latitude)`, so every radius filter, nearest ranking and `_distance_km`
+  (HTTP and the Python `query_radius` / `query_nearest`) used swapped coordinates. On the test
+  data a 6.08 km radius returned 14 rows instead of 4. With DuckDB 2.0 and
+  `geometry_always_xy = true` they are great-circle distances, and tests now check them against an
+  independent haversine. Bounding-box, point-in-polygon and geometry endpoints were not affected
+  (#62)
+- Radius queries dropped rows at high latitudes: the bounding box that narrows the search used
+  the same degree offset for longitude as for latitude, so above about 48° it was narrower than
+  the radius east–west (a row 9 km east of 60°N fell outside a 10 km radius). It now widens with
+  latitude, and there is no box where the circle reaches a pole or crosses ±180° (#64)
+- Windows: files load. `std::fs::canonicalize` returned a verbatim `\\?\C:\...` path, which
+  DuckDB reads as a glob and can't open; the CLI now uses `dunce::canonicalize` (#59)
+- Windows: the crate builds with MSVC 14.51 (GitHub's current Windows image). DuckDB 1.5.3's
+  bundled `fmt` used `stdext::checked_array_iterator`, which that compiler dropped; fixed first
+  by DuckDB 1.5.4, and now by the move to DuckDB 2.0 below (#61)
+- `--watch` sees changes made right after startup. The watcher was registered on its own thread
+  after the server had started answering, so an early change was missed; it is now registered
+  before the server binds, and startup fails if it can't be (#63)
+
 ## [0.2.12] - 2026-11-10
 
 ### Changed

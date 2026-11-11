@@ -10,6 +10,9 @@ on:
   # scratch. Release only follows push runs, so these never release.
   schedule:
     - cron: "17 7 * * 1,4"
+  # Run by hand on any branch: stacked PRs above the bottom one don't target main,
+  # so they get CI only this way (gh workflow run ci.yml --ref <branch>).
+  workflow_dispatch: {}
 
 concurrency:
   # A new push to a PR cancels its older run. Every other run gets its own group,
@@ -64,35 +67,115 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - run: cargo test --all
       - uses: actions/cache/save@v4
         if: github.ref == 'refs/heads/main'
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
 
-  build:
-    name: Build
+  # Build and test each binary publish.yml releases, the way it builds it, so a
+  # release never ships a build CI hasn't run. The Linux binaries are built in the
+  # manylinux 2_28 images (glibc 2.28) so they run on RHEL 8+, Debian 10+ and
+  # Amazon Linux 2023, not only on hosts as new as the runner.
+  build-linux:
+    name: Build and test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.image }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            image: quay.io/pypa/manylinux_2_28_x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            image: quay.io/pypa/manylinux_2_28_aarch64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: duckdb
+        shell: bash
+        run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
+      # The release profile, so the binary built is the one tested.
+      - run: cargo test --release
       - run: cargo build --release
+      - uses: actions/cache/save@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - uses: actions/upload-artifact@v4
         with:
-          name: terrana-${{ matrix.os }}
+          name: terrana-${{ matrix.target }}
           path: target/release/terrana
 
+  build:
+    name: Build and test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            test: true
+          # Cross-compiled on the arm64 runner, as publish.yml does; built, not run.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            test: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            test: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: duckdb
+        if: matrix.test
+        shell: bash
+        run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: matrix.test
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
+      - if: matrix.test
+        run: cargo test --release --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/cache/save@v4
+        if: matrix.test && github.ref == 'refs/heads/main'
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terrana-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/terrana${{ runner.os == 'Windows' && '.exe' || '' }}
+
   python:
-    name: Python bindings
-    runs-on: ubuntu-latest
+    name: Python bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 and arm64 Linux, both of which get a manylinux wheel on PyPI.
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     # The cold run compiles bundled DuckDB for the python crate (~15–20 min); the
     # cache below makes subsequent runs fast. 40 min is a safe backstop, not a target.
     timeout-minutes: 40
@@ -103,6 +186,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: python
+          key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@v5
       # The server tests need DuckDB's spatial extension; cached as in the test job.
@@ -111,7 +195,7 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       # Single shell so the activated venv persists across build + test.
       - name: Build extension and run tests
         working-directory: python
@@ -126,4 +210,4 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           path: ~/.duckdb/extensions
-          key: duckdb-extensions-${{ runner.os }}-${{ steps.duckdb.outputs.version }}
+          key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}

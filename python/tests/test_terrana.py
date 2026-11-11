@@ -8,7 +8,9 @@ Run with::
     uv run --with pytest pytest tests/ -v
 """
 
+import csv
 import json
+import math
 import os
 import signal
 import socket
@@ -67,6 +69,38 @@ def test_query_nearest_sorted(session):
     assert 0 < len(rows) <= 5
     dists = [r["_distance_km"] for r in rows]
     assert dists == sorted(dists)
+
+
+def _true_distances(lat, lon):
+    """(id, great-circle km) for every test row, nearest first, ties in file order
+    (how the server breaks them). Haversine with the mean Earth radius, independent
+    of DuckDB."""
+    with open(DATA) as f:
+        rows = list(csv.DictReader(f))
+    out = []
+    for r in rows:
+        p1, p2 = math.radians(lat), math.radians(float(r["latitude"]))
+        dl = math.radians(float(r["longitude"]) - lon)
+        a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        out.append((int(r["id"]), 2 * 6371.0088 * math.asin(math.sqrt(a))))
+    return sorted(out, key=lambda t: t[1])  # stable: keeps file order on ties
+
+
+def test_query_nearest_distances_are_great_circle_km(session):
+    want = _true_distances(36.5, -82.5)[:5]
+    got = session.query_nearest(36.5, -82.5, 5)
+    assert [r["id"] for r in got] == [i for i, _ in want]
+    for r, (_, d) in zip(got, want):
+        assert abs(r["_distance_km"] - d) < 1e-3
+
+
+def test_query_radius_matches_great_circle_km(session):
+    dists = _true_distances(36.5, -82.5)
+    # 6.08 km falls between rows (none within 50 m), so membership is unambiguous.
+    assert all(abs(d - 6.08) > 0.05 for _, d in dists)
+    within = {i for i, d in dists if d <= 6.08}
+    assert within
+    assert {r["id"] for r in session.query_radius(36.5, -82.5, 6080)} == within
 
 
 def test_geodesic_distance():

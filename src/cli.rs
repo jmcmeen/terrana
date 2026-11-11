@@ -185,7 +185,9 @@ fn serve(
         anyhow::bail!("File not found: {}", file.display());
     }
 
-    let abs_path = std::fs::canonicalize(&file)?;
+    // On Windows, std::fs::canonicalize gives a verbatim `\\?\C:\...` path, which
+    // DuckDB reads as a glob (`?`) and can't open; dunce returns `C:\...` instead.
+    let abs_path = dunce::canonicalize(&file)?;
     let source = file.display().to_string();
 
     // Hold _tmp_dir in scope so the temp directory lives as long as the server.
@@ -213,6 +215,7 @@ fn serve(
     let db_mutex = Arc::new(Mutex::new(conn));
     let snapshot = Arc::new(RwLock::new(Arc::new(snapshot)));
 
+    // Before the server binds, so once it answers, changes are already being watched.
     if watch {
         spawn_watcher(
             abs_path,
@@ -222,7 +225,7 @@ fn serve(
             lon.clone(),
             db_mutex.clone(),
             snapshot.clone(),
-        );
+        )?;
     }
 
     let state = AppState {
@@ -298,9 +301,14 @@ fn build_snapshot(
     )
 }
 
-/// Spawn a background thread that watches `abs_path` and re-ingests it on change,
-/// atomically swapping the shared snapshot. Watches the parent directory and filters
-/// by path so it survives editors that replace files via atomic rename.
+/// Watch `abs_path` and re-ingest it on change, atomically swapping the shared
+/// snapshot. Watches the parent directory and filters by path so it survives editors
+/// that replace files via atomic rename.
+///
+/// The watcher is registered here, on the caller's thread, and only event handling
+/// moves to a background thread: when this returns, a change to the file is seen.
+/// (Registering it on the thread raced with the server starting, so an early change
+/// could be missed.) An error means `--watch` can't work, so startup should fail.
 #[allow(clippy::too_many_arguments)]
 fn spawn_watcher(
     abs_path: std::path::PathBuf,
@@ -310,29 +318,25 @@ fn spawn_watcher(
     lon: Option<String>,
     db: Arc<Mutex<Connection>>,
     snapshot: Arc<RwLock<Arc<Snapshot>>>,
-) {
+) -> anyhow::Result<()> {
     use notify::{EventKind, RecursiveMode, Watcher};
     use std::sync::mpsc;
     use std::time::Duration;
 
-    std::thread::spawn(move || {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = match notify::recommended_watcher(move |res| {
-            let _ = tx.send(res);
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!("watch: failed to create watcher: {}", e);
-                return;
-            }
-        };
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    })
+    .map_err(|e| anyhow::anyhow!("--watch: can't create a file watcher: {}", e))?;
+    let watch_target = abs_path.parent().unwrap_or(&abs_path).to_path_buf();
+    watcher
+        .watch(&watch_target, RecursiveMode::NonRecursive)
+        .map_err(|e| anyhow::anyhow!("--watch: can't watch {}: {}", watch_target.display(), e))?;
+    info!("watching {} for changes", abs_path.display());
 
-        let watch_target = abs_path.parent().unwrap_or(&abs_path).to_path_buf();
-        if let Err(e) = watcher.watch(&watch_target, RecursiveMode::NonRecursive) {
-            tracing::error!("watch: failed to watch {}: {}", watch_target.display(), e);
-            return;
-        }
-        info!("watching {} for changes", abs_path.display());
+    std::thread::spawn(move || {
+        // Owned by the thread: dropping the watcher would stop the events.
+        let _watcher = watcher;
 
         let is_relevant = |res: &notify::Result<notify::Event>| -> bool {
             match res {
@@ -383,6 +387,7 @@ fn spawn_watcher(
             }
         }
     });
+    Ok(())
 }
 
 #[cfg(test)]

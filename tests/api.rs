@@ -759,3 +759,96 @@ fn cors_is_open_by_default_and_can_be_turned_off() {
         .unwrap();
     assert_eq!(header_of(&resp, "access-control-allow-origin"), None);
 }
+
+/// (id, great-circle km from `lat`, `lon`) for every row of the test data, nearest
+/// first (ties in file order). Haversine from the `geo` crate, independent of DuckDB.
+fn true_distances(lat: f64, lon: f64) -> Vec<(i64, f64)> {
+    use geo::{Distance, Haversine, Point};
+    let mut reader = csv::Reader::from_path("testdata/observations.csv").unwrap();
+    let headers = reader.headers().unwrap().clone();
+    let col = |name: &str| headers.iter().position(|h| h == name).unwrap();
+    let (id, la, lo) = (col("id"), col("latitude"), col("longitude"));
+    let mut out: Vec<(i64, f64)> = reader
+        .records()
+        .map(|r| {
+            let r = r.unwrap();
+            let p = Point::new(r[lo].parse::<f64>().unwrap(), r[la].parse::<f64>().unwrap());
+            let km = Haversine.distance(Point::new(lon, lat), p) / 1000.0;
+            (r[id].parse().unwrap(), km)
+        })
+        .collect();
+    // A stable sort keeps file order, which is how the server breaks ties (rowid).
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
+#[test]
+fn nearest_distances_are_great_circle_kilometres() {
+    let s = spawn(&[]);
+    let want = true_distances(36.5, -82.5);
+    let rows = get_json(&s, "/query?lat=36.5&lon=-82.5&nearest=5&select=id");
+    let got: Vec<(i64, f64)> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_i64().unwrap(),
+                r["_distance_km"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got.iter().map(|g| g.0).collect::<Vec<_>>(),
+        want[..5].iter().map(|w| w.0).collect::<Vec<_>>(),
+        "the five nearest rows"
+    );
+    for ((id, g), (_, w)) in got.iter().zip(&want) {
+        assert!((g - w).abs() < 1e-3, "row {id}: {g} km, haversine {w} km");
+    }
+}
+
+#[test]
+fn radius_returns_exactly_the_rows_within_range() {
+    let s = spawn(&[]);
+    let want = true_distances(36.5, -82.5);
+    // 6.08 km falls between rows (none within 50 m of it), so membership is unambiguous.
+    assert!(want.iter().all(|(_, d)| (d - 6.08).abs() > 0.05));
+    let mut expected: Vec<i64> = want
+        .iter()
+        .filter(|(_, d)| *d <= 6.08)
+        .map(|w| w.0)
+        .collect();
+    expected.sort();
+    let mut got = ids(&s, "/query?lat=36.5&lon=-82.5&radius=6080m&select=id");
+    got.sort();
+    assert!(!expected.is_empty());
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn radius_finds_rows_east_and_west_at_high_latitude() {
+    // At 60°N a degree of longitude is about 55.6 km. Rows 9 km east and west of the
+    // centre are inside a 10 km radius; a box sized for latitude alone dropped them.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("north.csv");
+    let dlon = 9.0 / (111.32 * 60f64.to_radians().cos());
+    std::fs::write(
+        &path,
+        format!(
+            "id,latitude,longitude\n1,60.0,10.0\n2,60.0,{}\n3,60.0,{}\n4,60.0,{}\n",
+            10.0 + dlon,
+            10.0 - dlon,
+            10.0 + 2.0 * dlon
+        ),
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let mut got = ids(&s, "/query?lat=60&lon=10&radius=10km&select=id");
+    got.sort();
+    assert_eq!(
+        got,
+        [1, 2, 3],
+        "row 4 is 18 km away; the others are within 10 km"
+    );
+}

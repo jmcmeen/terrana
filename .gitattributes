@@ -1,0 +1,3 @@
+# Check out every text file with LF endings, also on Windows: the CI reads versions
+# out of Cargo.lock with line-anchored patterns, and the test data compares exactly.
+* text=auto eol=lf
