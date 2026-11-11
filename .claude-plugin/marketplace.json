@@ -6,7 +6,8 @@
   "plugins": [
     {
       "name": "terrana",
-      "source": "./",
+      "source": "./skills",
+      "skills": ["./"],
       "description": "Skills for checking and querying point datasets with terrana (needs the terrana binary or `pip install terrana`)",
       "category": "data",
       "tags": ["geospatial", "gis", "data-quality"]

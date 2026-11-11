@@ -51,8 +51,9 @@ An agent's decisions rest on objective scripts, not its own judgement:
 ## Installing a skill
 
 In Claude Code, install them all as the `terrana` plugin from this repository's
-marketplace (`.claude-plugin/marketplace.json`); a skill then runs as
-`/terrana:<name>`, for example `/terrana:check-coordinates`:
+marketplace (`.claude-plugin/marketplace.json`, whose plugin is this folder, so an
+install copies only `skills/`); a skill then runs as `/terrana:<name>`, for example
+`/terrana:check-coordinates`:
 
 ```
 /plugin install terrana --marketplace jmcmeen/terrana

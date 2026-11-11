@@ -244,11 +244,12 @@ def test_skills_share_one_helper():
 
 
 def test_the_marketplace_installs_every_skill_as_one_plugin():
-    """`/plugin install terrana --marketplace jmcmeen/terrana` takes the repo root as the
-    plugin, so Claude Code finds every folder in skills/ on its own."""
+    """`/plugin install terrana --marketplace jmcmeen/terrana`: the plugin is the skills/
+    folder, so Claude Code finds every skill there and an install copies only skills/."""
     market = json.loads((SKILLS.parent / ".claude-plugin" / "marketplace.json").read_text())
     assert market["name"] == "terrana"
-    assert [(p["name"], p["source"]) for p in market["plugins"]] == [("terrana", "./")]
+    [plugin] = market["plugins"]
+    assert (plugin["name"], plugin["source"], plugin["skills"]) == ("terrana", "./skills", ["./"])
     for skill in [p for p in SKILLS.iterdir() if p.is_dir()]:
         text = (skill / "SKILL.md").read_text()
         assert "<this skill>" not in text
