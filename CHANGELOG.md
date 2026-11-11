@@ -9,10 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- The Python bindings use pyo3 0.29 (was 0.23), fixing three advisories: an out-of-bounds read in
-  `PyList`/`PyTuple` iterators, a missing `Sync` bound on closures passed to
-  `PyCFunction::new_closure`, and a buffer overflow risk in `PyString::from_object`. pythonize
-  moves to 0.29 with it. The Python API is unchanged (#53)
+- The Python bindings use pyo3 0.29 (was 0.23), which fixes three pyo3 advisories: an
+  out-of-bounds read in `PyList`/`PyTuple` iterators, a missing `Sync` bound on
+  `PyCFunction::new_closure` closures, and a buffer overflow risk in `PyString::from_object`.
+  terrana's own code doesn't call the affected APIs. pythonize moves to 0.29 with it. Building the
+  Python package from source now needs Rust 1.83; the engine crate still builds on 1.82 (#53)
+
+### Fixed
+
+- Python: `query_radius`, `query_bbox` and `query_nearest` release the GIL while DuckDB runs, so a
+  query waiting behind the background server no longer stalls every other Python thread (#73)
+- Python: `TerranaServer.shutdown()` can be called from several threads at once; each call returns
+  once the server has stopped, instead of the later ones raising `Already borrowed` (#74)
 
 ## [0.3.1] - 2026-11-11
 

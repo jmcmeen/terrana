@@ -153,18 +153,21 @@ impl TerranaSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let spatial = query::radius_filter(lat, lon, radius_m);
         let extra = query::distance_select(lat, lon);
-        let rows = query::query(
-            &self.db,
-            Some(&spatial),
-            &[],
-            None,
-            None,
-            None,
-            query::MAX_RESULT_LIMIT,
-            Some(&extra),
-            Some("_distance_km ASC"),
-        )
-        .map_err(pyerr)?;
+        let rows = py
+            .detach(|| {
+                query::query(
+                    &self.db,
+                    Some(&spatial),
+                    &[],
+                    None,
+                    None,
+                    None,
+                    query::MAX_RESULT_LIMIT,
+                    Some(&extra),
+                    Some("_distance_km ASC"),
+                )
+            })
+            .map_err(pyerr)?;
         pythonize(py, &rows).map_err(pyerr)
     }
 
@@ -178,18 +181,21 @@ impl TerranaSession {
         max_lon: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let spatial = query::bbox_filter(min_lat, min_lon, max_lat, max_lon);
-        let rows = query::query(
-            &self.db,
-            Some(&spatial),
-            &[],
-            None,
-            None,
-            None,
-            query::MAX_RESULT_LIMIT,
-            None,
-            None,
-        )
-        .map_err(pyerr)?;
+        let rows = py
+            .detach(|| {
+                query::query(
+                    &self.db,
+                    Some(&spatial),
+                    &[],
+                    None,
+                    None,
+                    None,
+                    query::MAX_RESULT_LIMIT,
+                    None,
+                    None,
+                )
+            })
+            .map_err(pyerr)?;
         pythonize(py, &rows).map_err(pyerr)
     }
 
@@ -206,18 +212,21 @@ impl TerranaSession {
         k: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
         let extra = query::distance_select(lat, lon);
-        let rows = query::query(
-            &self.db,
-            Some("geom IS NOT NULL"),
-            &[],
-            None,
-            None,
-            None,
-            k,
-            Some(&extra),
-            Some("_distance_km ASC"),
-        )
-        .map_err(pyerr)?;
+        let rows = py
+            .detach(|| {
+                query::query(
+                    &self.db,
+                    Some("geom IS NOT NULL"),
+                    &[],
+                    None,
+                    None,
+                    None,
+                    k,
+                    Some(&extra),
+                    Some("_distance_km ASC"),
+                )
+            })
+            .map_err(pyerr)?;
         pythonize(py, &rows).map_err(pyerr)
     }
 
@@ -293,8 +302,7 @@ impl TerranaSession {
             });
         });
         Ok(TerranaServer {
-            tx: Some(tx),
-            handle: Some(handle),
+            running: Mutex::new(Some((tx, handle))),
         })
     }
 }
@@ -375,23 +383,30 @@ impl TerranaSession {
 /// it shuts down on `__exit__`.
 #[pyclass]
 struct TerranaServer {
-    tx: Option<tokio::sync::oneshot::Sender<()>>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    /// The stop signal and server thread, taken by whichever call stops it first.
+    /// Behind a mutex so `shutdown` takes `&self`: a second caller waits for the
+    /// first to finish rather than failing to borrow.
+    running: Mutex<Option<ServerHandle>>,
 }
+
+type ServerHandle = (
+    tokio::sync::oneshot::Sender<()>,
+    std::thread::JoinHandle<()>,
+);
 
 #[pymethods]
 impl TerranaServer {
     /// Signal the background server to stop and block until its thread has fully
-    /// joined (the GIL is released while joining). Idempotent.
-    fn shutdown(&mut self, py: Python<'_>) {
-        if let Some(tx) = self.tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            py.detach(move || {
+    /// joined (the GIL is released while waiting). Idempotent and safe to call
+    /// from several threads: every call returns once the server has stopped.
+    fn shutdown(&self, py: Python<'_>) {
+        py.detach(|| {
+            let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((tx, handle)) = running.take() {
+                let _ = tx.send(());
                 let _ = handle.join();
-            });
-        }
+            }
+        });
     }
 
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -400,7 +415,7 @@ impl TerranaServer {
 
     #[pyo3(signature = (_exc_type = None, _exc_value = None, _traceback = None))]
     fn __exit__(
-        &mut self,
+        &self,
         py: Python<'_>,
         _exc_type: Option<Bound<'_, PyAny>>,
         _exc_value: Option<Bound<'_, PyAny>>,
@@ -416,12 +431,11 @@ impl Drop for TerranaServer {
     /// so a dropped handle never leaks the background thread. A plain join (the GIL
     /// may be held during drop) is safe here because the server thread runs only
     /// Rust (tokio / axum / DuckDB) and never acquires the GIL. No-op after an
-    /// explicit `shutdown()`, which has already taken `tx` and `handle`.
+    /// explicit `shutdown()`, which has already taken the handle.
     fn drop(&mut self) {
-        if let Some(tx) = self.tx.take() {
+        let running = self.running.get_mut().unwrap_or_else(|e| e.into_inner());
+        if let Some((tx, handle)) = running.take() {
             let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
     }
@@ -551,7 +565,10 @@ fn _run_cli(py: Python<'_>) -> PyResult<()> {
 }
 
 /// The `terrana` Python module.
-#[pymodule]
+// pyo3 0.28+ declares modules free-threading safe by default. Keep the GIL on a
+// free-threaded interpreter until the bindings have been checked for running
+// without it.
+#[pymodule(gil_used = true)]
 fn terrana(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TerranaSession>()?;
     m.add_class::<TerranaServer>()?;
