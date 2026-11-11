@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maturin's x86_64 default was 10.12. The macOS x86_64 wheel and binary now target 10.13 (arm64
   stays at 11.0), and CI builds that wheel too (#69)
 
+### Security
+
+- rustls updated to 0.23.46 for four advisories. It is used only by the test suite's HTTP client,
+  so released binaries and wheels were not affected (#71)
+
 ## [0.3.0] - 2026-11-11
 
 > **Radius and nearest results were wrong in every earlier release.** Distances were computed
