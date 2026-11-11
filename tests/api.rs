@@ -681,8 +681,8 @@ fn columns_with_spaces_and_punctuation_in_their_names() {
     assert_eq!(
         rows,
         serde_json::json!([
-            {"Site Name": "a", "sum_COUNT (N)": 3.0},
-            {"Site Name": "b", "sum_COUNT (N)": 6.0},
+            {"Site Name": "a", "sum_COUNT (N)": 3},
+            {"Site Name": "b", "sum_COUNT (N)": 6},
         ])
     );
     // A quote in a name is part of the name, not the end of the identifier.
@@ -761,7 +761,7 @@ fn an_aggregate_named_like_the_group_column_takes_an_underscore() {
     );
     assert_eq!(
         get_json(&s, "/query?group_by=SUM_N&agg=sum:n"),
-        serde_json::json!([{"sum_n": "a", "_sum_n": 5.0}, {"sum_n": "b", "_sum_n": 2.0}])
+        serde_json::json!([{"sum_n": "a", "_sum_n": 5}, {"sum_n": "b", "_sum_n": 2}])
     );
     // No clash, no underscore.
     assert_eq!(
@@ -786,6 +786,29 @@ fn agg_must_be_a_supported_form() {
     assert!(rows[0].get("sum_count").is_some(), "{rows}");
     let rows = get_json(&s, "/query?group_by=species&agg=%20Count%20&limit=1");
     assert!(rows[0].get("count").is_some(), "{rows}");
+}
+
+#[test]
+fn sums_of_whole_numbers_are_integers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "lat,lon,g,n,big,x\n\
+         36.5,-82.5,a,2,9223372036854775807,1.5\n\
+         36.6,-82.4,a,3,9223372036854775807,2\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let one = |agg: &str| get_json(&s, &format!("/query?group_by=g&agg={agg}"))[0].clone();
+    assert_eq!(one("sum:n")["sum_n"], serde_json::json!(5));
+    // Past i64, the exact digits as text.
+    assert_eq!(
+        one("sum:big")["sum_big"],
+        serde_json::json!("18446744073709551614")
+    );
+    assert_eq!(one("sum:x")["sum_x"], serde_json::json!(3.5));
+    assert_eq!(one("avg:n")["avg_n"], serde_json::json!(2.5));
 }
 
 #[test]

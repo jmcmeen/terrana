@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
   take the header's spelling, so `/schema` reports the real column and GeoJSON output and
   `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- `agg=sum:` on a whole-number column returns an integer (`6`, not `6.0`); a sum past the
+  64-bit range comes back as its exact digits in a string, as large unsigned values already
+  did. Whole-number `DECIMAL(p, 0)`, `HUGEINT` and `UHUGEINT` values are integers too (#82)
 - An `agg` that isn't `count`, `sum:`, `avg:`, `min:` or `max:` (`agg=median:count`) is a 400
   listing the forms when given with `group_by`; it silently counted rows. The function matches
   whatever its case (`SUM:count`) (#90)

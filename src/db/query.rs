@@ -8,6 +8,7 @@ use crate::db::filter::Condition;
 use crate::error::AppError;
 use chrono::NaiveDate;
 use duckdb::arrow::datatypes::DataType;
+use duckdb::types::ValueRef;
 use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -420,6 +421,15 @@ pub fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Va
     Ok(rows_out)
 }
 
+/// A whole number as a JSON number when it fits in an `i64`, else its exact digits as
+/// a string: past that, many JSON readers (JavaScript's among them) would round it.
+fn int_json(v: i128) -> Value {
+    match i64::try_from(v) {
+        Ok(v) => json!(v),
+        Err(_) => json!(v.to_string()),
+    }
+}
+
 /// Extract a DuckDB row value at column index into a serde_json::Value,
 /// using the Arrow DataType to pick the right conversion.
 fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Value {
@@ -435,9 +445,22 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Err(_) => Value::Null,
         },
         DataType::UInt64 => match row.get::<_, u64>(idx) {
-            Ok(v) if v <= i64::MAX as u64 => json!(v),
-            Ok(v) => json!(v.to_string()),
+            Ok(v) => int_json(i128::from(v)),
             Err(_) => Value::Null,
+        },
+        // HUGEINT (DuckDB's SUM of integers), UHUGEINT and DECIMAL(p, 0) all arrive as
+        // Decimal128(38, 0); DuckDB's own value type tells them apart.
+        DataType::Decimal128(_, 0) => match row.get_ref(idx) {
+            Ok(ValueRef::HugeInt(v)) => int_json(v),
+            Ok(ValueRef::UHugeInt(v)) => i128::try_from(v)
+                .map(int_json)
+                .unwrap_or_else(|_| json!(v.to_string())),
+            Ok(ValueRef::Decimal(d)) if d.scale() == 0 => int_json(d.value()),
+            Ok(ValueRef::Null) | Err(_) => Value::Null,
+            Ok(_) => match row.get::<_, f64>(idx) {
+                Ok(v) if v.is_finite() => json!(v),
+                _ => Value::Null,
+            },
         },
         DataType::Float16
         | DataType::Float32
@@ -505,6 +528,31 @@ mod tests {
             let err = parse_agg(bad).unwrap_err().to_string();
             assert!(err.contains("Use count, sum:col"), "{bad}: {err}");
         }
+    }
+
+    #[test]
+    fn whole_numbers_are_integers_and_text_past_i64() {
+        let db = Mutex::new(db::create_connection().unwrap());
+        let rows = execute_query_to_json(
+            &db,
+            "SELECT 6::HUGEINT AS h, (-9223372036854775808)::HUGEINT - 1 AS h_low, \
+             NULL::HUGEINT AS h_null, 340282366920938463463374607431768211455::UHUGEINT AS uh, \
+             12::DECIMAL(10, 0) AS d0, 1.25::DECIMAL(10, 2) AS d2, \
+             18446744073709551615::UBIGINT AS ub",
+        )
+        .unwrap();
+        assert_eq!(
+            rows[0],
+            json!({
+                "h": 6,
+                "h_low": "-9223372036854775809",
+                "h_null": null,
+                "uh": "340282366920938463463374607431768211455",
+                "d0": 12,
+                "d2": 1.25,
+                "ub": "18446744073709551615",
+            })
+        );
     }
 
     #[test]
