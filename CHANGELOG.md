@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-11
+
 ### Security
 
 - The Python bindings use pyo3 0.29 (was 0.23), which fixes three pyo3 advisories: an
@@ -278,7 +280,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a SQL-injection vector in the `--table` argument for `.duckdb` sources: the table identifier is now validated and quoted before interpolation
 - Bounding-box query parameters are now range-validated (lat ∈ [-90, 90], lon ∈ [-180, 180], min ≤ max)
 
-[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/jmcmeen/terrana/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jmcmeen/terrana/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jmcmeen/terrana/compare/v0.2.12...v0.3.0
 [0.2.12]: https://github.com/jmcmeen/terrana/compare/v0.2.11...v0.2.12
