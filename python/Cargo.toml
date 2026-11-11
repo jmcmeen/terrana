@@ -25,7 +25,8 @@ pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 pythonize = "0.23"
 tokio = { version = "1", features = ["full"] }
 # Same bundled DuckDB as the engine (features unify), so we can name `Connection`.
-duckdb = { version = "1", features = ["bundled"] }
+# 1.20000 (DuckDB 2.0): `geometry_always_xy`, which radius/nearest distances depend on.
+duckdb = { version = "1.20000", features = ["bundled"] }
 geo-types = "0.7"
 geojson = { version = "1", features = ["geo-types"] }
 serde_json = "1"

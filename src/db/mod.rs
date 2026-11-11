@@ -15,8 +15,12 @@ use std::sync::{Mutex, MutexGuard};
 /// `INSTALL` downloads the extension into DuckDB's extension directory
 /// (`~/.duckdb/extensions/<version>/<platform>/` by default) the first time, and
 /// is a local no-op once it's there, so only the first run needs the network.
+/// Also sets `geometry_always_xy`, so points are read as (longitude, latitude).
 pub fn ensure_spatial(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch("INSTALL spatial; LOAD spatial;")
+    // Every geometry here is ST_Point(lon, lat): x first. DuckDB 2.0 refuses to run
+    // axis-order-sensitive functions such as ST_Distance_Sphere until this is set
+    // (2.1 makes it the default); without it they'd read points as (lat, lon).
+    conn.execute_batch("INSTALL spatial; LOAD spatial; SET geometry_always_xy = true;")
         .map_err(|e| {
             AppError::Internal(anyhow::anyhow!(
                 "couldn't install or load DuckDB's spatial extension (the first run downloads \

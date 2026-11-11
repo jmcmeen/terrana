@@ -51,7 +51,8 @@ tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.8", optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
-duckdb = { version = "1", features = ["bundled"] }
+# 1.20000 (DuckDB 2.0): `geometry_always_xy`, which radius/nearest distances depend on.
+duckdb = { version = "1.20000", features = ["bundled"] }
 geo = "0.33"
 geo-types = "0.7"
 geojson = { version = "1", features = ["geo-types"] }
