@@ -18,8 +18,9 @@ skills/<name>/
     └── <step>.py     # one script per step
 ```
 
-`SKILL.md` starts with front matter giving the skill's `name` (prefixed `terrana-`),
-a `description` that says when an agent should use it, and `allowed-tools` for its
+`SKILL.md` starts with front matter giving the skill's `name` (its folder's name; the
+plugin adds the `terrana:` prefix, and a plugin skill's command takes the `name`), a
+`description` that says when an agent should use it, and `allowed-tools` for its
 scripts. The body tells the agent
 which scripts to run, in what order, and what to report.
 
@@ -70,8 +71,9 @@ project):
 $ ln -s /path/to/terrana/skills/check-coordinates ~/.claude/skills/terrana-check-coordinates
 ```
 
-`SKILL.md` refers to its scripts as `${CLAUDE_SKILL_DIR}/scripts/...`, which Claude Code
-fills in either way.
+A linked skill runs as `/<name>` or by the link's folder name. `SKILL.md` runs its
+scripts as `python3 "${CLAUDE_SKILL_DIR}/scripts/..."`, which Claude Code fills in either
+way.
 
 ## Evaluating a skill
 

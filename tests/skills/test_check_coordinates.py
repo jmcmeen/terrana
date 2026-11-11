@@ -232,7 +232,8 @@ def test_rows_follow_paging(running_server, mixed):
 def test_every_skill_has_a_skill_md_with_name_and_description():
     for skill in [p for p in SKILLS.iterdir() if p.is_dir()]:
         text = (skill / "SKILL.md").read_text()
-        assert text.startswith("---\nname: terrana-"), skill.name
+        # A plugin skill's command is /terrana:<name>; the name is the folder's.
+        assert text.startswith(f"---\nname: {skill.name}\n"), skill.name
         assert "\ndescription: " in text.split("---")[1]
         assert (skill / "scripts").is_dir()
 
@@ -253,4 +254,6 @@ def test_the_marketplace_installs_every_skill_as_one_plugin():
     for skill in [p for p in SKILLS.iterdir() if p.is_dir()]:
         text = (skill / "SKILL.md").read_text()
         assert "<this skill>" not in text
-        assert "${CLAUDE_SKILL_DIR}/scripts/" in text, skill.name
+        assert 'python3 "${CLAUDE_SKILL_DIR}/scripts/' in text, (
+            skill.name
+        )  # quoted: paths may have spaces

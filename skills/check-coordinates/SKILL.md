@@ -1,7 +1,7 @@
 ---
-name: terrana-check-coordinates
+name: check-coordinates
 description: Check a point dataset's coordinates (CSV, Parquet, GeoJSON or DuckDB) before it's used, counting rows with no point, coordinates out of range, points at (0, 0) and points outside an expected area. Use when asked whether a dataset's locations can be trusted, or before mapping, joining or analysing it by location.
-allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/check_coordinates.py *)
+allowed-tools: Bash(python3 "${CLAUDE_SKILL_DIR}/scripts/check_coordinates.py" *)
 ---
 
 # Check coordinates
@@ -12,7 +12,7 @@ minimal example of a terrana skill (see `skills/README.md` in the terrana reposi
 ## Run
 
 ```
-python3 ${CLAUDE_SKILL_DIR}/scripts/check_coordinates.py <file> [--bbox MIN_LAT,MIN_LON,MAX_LAT,MAX_LON]
+python3 "${CLAUDE_SKILL_DIR}/scripts/check_coordinates.py" <file> [--bbox MIN_LAT,MIN_LON,MAX_LAT,MAX_LON]
     [--max-flagged-fraction F] [--lat COLUMN --lon COLUMN]
 ```
 
