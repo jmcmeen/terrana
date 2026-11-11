@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Python users:** this is the first release on PyPI since 0.2.12 (0.3.0's wheels didn't
+> reach PyPI). It includes 0.3.0's fix for **radius and nearest results, which were wrong in
+> every earlier release**: if you used `query_radius()`, `query_nearest()` or `_distance_km`,
+> rerun those queries. See [0.3.0](#030---2026-11-11) and
+> [#62](https://github.com/jmcmeen/terrana/issues/62).
+
 ### Fixed
 
 - The macOS x86_64 wheel builds again, so every wheel reaches PyPI: 0.3.0's PyPI upload was skipped
