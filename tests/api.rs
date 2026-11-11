@@ -466,7 +466,7 @@ fn watch_reload_reflects_new_rows() {
     // Rewrite the file with two more rows; --watch should re-ingest it.
     std::fs::write(
         &path,
-        "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n4,36.8,-82.2\n",
+        "id,Latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n4,36.8,-82.2\n",
     )
     .unwrap();
 
@@ -608,6 +608,40 @@ fn where_null_tests() {
     assert_eq!(ids(&s, "/query?where=count:notnull&select=id"), [1, 3]);
     // Like SQL, ne doesn't match nulls.
     assert_eq!(ids(&s, "/query?where=count:ne:3&select=id"), [3]);
+}
+
+#[test]
+fn coordinates_that_arent_numbers_dont_stop_the_server() {
+    // One text value makes DuckDB read the column as text; the server still starts.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "id,Latitude,longitude\n1,36.5,-82.5\n2,abc,-82\n3,NA,unknown\n4,36.7,-82.3\n",
+    )
+    .unwrap();
+    // An override in another case than the header's still names the column.
+    let s = spawn_file(path.to_str().unwrap(), &["--lat", "latitude"]);
+    let stats = get_json(&s, "/stats");
+    assert_eq!(
+        (
+            stats["row_count"].as_i64(),
+            stats["spatial_points"].as_i64()
+        ),
+        (Some(4), Some(2))
+    );
+    let schema = get_json(&s, "/schema");
+    let lat = schema["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Latitude");
+    assert_eq!(lat.unwrap()["type"], "DOUBLE");
+    // Like rows with a blank coordinate, they're left out.
+    assert_eq!(ids(&s, "/query?select=id"), [1, 4]);
+    // Compared as numbers, not text.
+    assert_eq!(ids(&s, "/query?where=latitude:gt:36.6&select=id"), [4]);
+    assert_eq!(ids(&s, "/query?bbox=36,-83,37,-82&select=id"), [1, 4]);
 }
 
 #[test]

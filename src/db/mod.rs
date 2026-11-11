@@ -105,6 +105,12 @@ pub fn get_table_info_relation(conn: &Connection, relation: &str) -> Result<Tabl
     })
 }
 
+/// `name` as a quoted SQL identifier (`"..."`, embedded quotes doubled), so any column
+/// name, spaces and punctuation included, is read as one name.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Validate a column name from user input (prevent SQL injection).
 pub fn validate_column_name(name: &str) -> Result<&str, AppError> {
     if name.is_empty() {
@@ -128,6 +134,12 @@ mod tests {
         assert!(validate_column_name("species").is_ok());
         assert!(validate_column_name("quality_grade").is_ok());
         assert!(validate_column_name("col1").is_ok());
+    }
+
+    #[test]
+    fn quote_ident_doubles_embedded_quotes() {
+        assert_eq!(quote_ident("Lat Deg"), "\"Lat Deg\"");
+        assert_eq!(quote_ident("a\"b"), "\"a\"\"b\"");
     }
 
     #[test]

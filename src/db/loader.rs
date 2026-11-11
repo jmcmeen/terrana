@@ -2,10 +2,11 @@
 //! spatial-index construction. All user-supplied identifiers are validated or quoted
 //! before being interpolated into SQL.
 
+use crate::db::quote_ident;
 use crate::error::AppError;
 use duckdb::Connection;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Drop the live dataset artifacts. A no-op on first load; called by
 /// [`promote_stage`] to clear the previous dataset before swapping in the new one.
@@ -224,10 +225,30 @@ pub fn add_spatial_index(
 
     crate::db::ensure_spatial(conn)?;
 
+    // One value that isn't a number ("NA", a typo) makes DuckDB read the whole column
+    // as text. Such a column is cast to DOUBLE (once, in a subquery); a value that
+    // doesn't parse becomes null, and the row is left out, as one with a blank
+    // coordinate is.
+    let (lat, lon) = (quote_ident(lat_col), quote_ident(lon_col));
+    let mut casts = Vec::new();
+    for col in [lat_col, lon_col] {
+        let (name, dtype) = column_type(conn, col)?;
+        if dtype == "VARCHAR" {
+            warn_unparsed(conn, &name)?;
+            // The header's spelling, so the column keeps its name.
+            let q = quote_ident(&name);
+            casts.push(format!("TRY_CAST({q} AS DOUBLE) AS {q}"));
+        }
+    }
+    let source = if casts.is_empty() {
+        "raw_data".to_string()
+    } else {
+        format!("(SELECT * REPLACE ({}) FROM raw_data)", casts.join(", "))
+    };
+
     // Create new table with geometry column (avoids ALTER TABLE + UPDATE crash)
     conn.execute_batch(&format!(
-        "CREATE TABLE spatial_data AS SELECT *, ST_Point(\"{lon}\", \"{lat}\") AS geom FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
-        lat = lat_col, lon = lon_col,
+        "CREATE TABLE spatial_data AS SELECT *, ST_Point({lon}, {lat}) AS geom FROM {source} WHERE {lat} IS NOT NULL AND {lon} IS NOT NULL",
     ))
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial table creation error: {}", e)))?;
 
@@ -258,7 +279,7 @@ pub fn add_spatial_index(
             .get(0)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Column name error: {}", e)))?;
         if name != "geom" {
-            cols.push(format!("\"{}\"", name));
+            cols.push(quote_ident(&name));
         }
     }
     drop(rows);
@@ -271,6 +292,43 @@ pub fn add_spatial_index(
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Recreate view error: {}", e)))?;
 
     info!("spatial index created");
+    Ok(())
+}
+
+/// The name and DuckDB type of `raw_data`'s column `col`, matched case-insensitively
+/// as DuckDB matches identifiers (`--lat latitude` names a `Latitude` column).
+fn column_type(conn: &duckdb::Connection, col: &str) -> Result<(String, String), AppError> {
+    conn.query_row(
+        "SELECT column_name, data_type FROM information_schema.columns \
+         WHERE table_name = 'raw_data' AND lower(column_name) = lower(?) LIMIT 1",
+        [col],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Column type error for '{}': {}", col, e)))
+}
+
+/// Log how many of text column `col`'s values aren't numbers, with an example, since
+/// those rows are left out.
+fn warn_unparsed(conn: &duckdb::Connection, col: &str) -> Result<(), AppError> {
+    let q = quote_ident(col);
+    let (count, example): (i64, Option<String>) = conn
+        .query_row(
+            &format!(
+                "SELECT count(*), any_value({q}) FROM raw_data \
+                 WHERE {q} IS NOT NULL AND TRY_CAST({q} AS DOUBLE) IS NULL"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Column check error: {}", e)))?;
+    if count > 0 {
+        warn!(
+            column = %col,
+            rows = count,
+            example = %example.unwrap_or_default(),
+            "values that aren't numbers; those rows are left out"
+        );
+    }
     Ok(())
 }
 

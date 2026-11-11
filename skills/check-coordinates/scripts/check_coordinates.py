@@ -1,7 +1,7 @@
 """Check a point dataset's coordinates before it's used; flag rows that need a look.
 
-Counts rows with no point (blank coordinates), coordinates that aren't a finite number
-in range (latitude -90..90, longitude -180..180), points at exactly (0, 0), and, given
+Counts rows with no point (coordinates blank or not numbers), coordinates that aren't
+finite or in range (latitude -90..90, longitude -180..180), points at exactly (0, 0), and, given
 an expected ``--bbox``, valid points outside it. Writes ``report.json`` (every flagged
 row id) to ``runs/check-coordinates/<timestamp>/``. The check fails when the flagged
 share of rows is above ``--max-flagged-fraction``, or when there are no rows: an

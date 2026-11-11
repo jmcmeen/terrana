@@ -158,6 +158,14 @@ def test_non_finite_coordinates_are_out_of_range(run_skill, tmp_path):
     assert summary["examples"] == {"out_of_range": [2, 3]}
 
 
+def test_coordinates_that_arent_numbers_count_as_missing(run_skill, tmp_path):
+    write_csv(tmp_path / "text.csv", [("a", 36.5, -82.5), ("b", "NA", -82), ("c", 36, "unknown")])
+    code, summary = run_skill("check-coordinates", "check_coordinates", "text.csv", cwd=tmp_path)
+    assert code == 2, summary
+    assert summary["counts"]["missing_point"] == 2
+    assert summary["counts"]["out_of_range"] == 0
+
+
 def test_coordinate_columns_with_spaces_in_their_names(run_skill, tmp_path):
     (tmp_path / "cols.csv").write_text("site,Lat Deg,Lon Deg\na,36.5,-82.5\nb,91,-82.5\n")
     args = ["cols.csv", "--lat", "Lat Deg", "--lon", "Lon Deg", "--bbox", BOX]

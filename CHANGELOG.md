@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/skills/` that CI runs. In Claude Code, install them all as a plugin:
   `/plugin install terrana --marketplace jmcmeen/terrana` (#77)
 
+### Fixed
+
+- A latitude or longitude value that isn't a number ("NA", a typo) no longer stops
+  `terrana serve` from starting. The column is read as numbers and that row is left out, as
+  one with a blank coordinate is; the log names the column, the number of such rows and an
+  example. A `--lat`/`--lon` written in another case than the header still works (#76)
+
 ## [0.3.2] - 2026-11-11
 
 ### Security

@@ -29,7 +29,8 @@ that doesn't fill it in, use that folder's path.
   file and `--lat`/`--lon`: the script checks the data that server was started on, and
   refuses a file so it can't report on the wrong one.
 
-It prints a JSON summary: `source`, `counts` per problem (`missing_point`;
+It prints a JSON summary: `source`, `counts` per problem (`missing_point`, a coordinate blank or not
+a number;
 `out_of_range`, which includes coordinates that aren't finite numbers; `null_island`;
 `outside_bbox`), `examples` (row ids), `flagged_rows`,
 `flagged_fraction`, `passed`, and `run_dir`, where `report.json` lists every flagged
