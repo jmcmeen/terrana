@@ -18,8 +18,9 @@ skills/<name>/
     └── <step>.py     # one script per step
 ```
 
-`SKILL.md` starts with front matter giving the skill's `name` (prefixed `terrana-`)
-and a `description` that says when an agent should use it. The body tells the agent
+`SKILL.md` starts with front matter giving the skill's `name` (prefixed `terrana-`),
+a `description` that says when an agent should use it, and `allowed-tools` for its
+scripts. The body tells the agent
 which scripts to run, in what order, and what to report.
 
 ## Rules for skill scripts
@@ -49,12 +50,27 @@ An agent's decisions rest on objective scripts, not its own judgement:
 
 ## Installing a skill
 
-Copy or link the skill's folder into the agent's skills directory. For Claude Code,
-that is `.claude/skills/` in a project, or `~/.claude/skills/` for every project:
+In Claude Code, install them all as the `terrana` plugin from this repository's
+marketplace (`.claude-plugin/marketplace.json`); a skill then runs as
+`/terrana:<name>`, for example `/terrana:check-coordinates`:
+
+```
+/plugin install terrana --marketplace jmcmeen/terrana
+```
+
+On Claude Code older than 2.1.275, add the marketplace first:
+`/plugin marketplace add jmcmeen/terrana`, then `/plugin install terrana@terrana`.
+
+For any agent, copy or link a skill's folder into the agent's skills directory
+(Claude Code: `.claude/skills/` in a project or `~/.claude/skills/` for every
+project):
 
 ```console
 $ ln -s /path/to/terrana/skills/check-coordinates ~/.claude/skills/terrana-check-coordinates
 ```
+
+`SKILL.md` refers to its scripts as `${CLAUDE_SKILL_DIR}/scripts/...`, which Claude Code
+fills in either way.
 
 ## Evaluating a skill
 

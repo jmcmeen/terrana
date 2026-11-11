@@ -399,13 +399,21 @@ that measure and check, not on its own judgement. `check-coordinates` counts row
 point, coordinates out of range, points at (0, 0) and points outside an expected area, and
 fails above a threshold:
 
-```console
-$ ln -s "$PWD/skills/check-coordinates" ~/.claude/skills/terrana-check-coordinates
-$ python skills/check-coordinates/scripts/check_coordinates.py observations.csv --bbox 35,-84,37,-81
+In Claude Code, install them as a plugin from this repository's marketplace; the skill
+then runs as `/terrana:check-coordinates`:
+
+```
+/plugin install terrana --marketplace jmcmeen/terrana
 ```
 
-See [skills/README.md](skills/README.md) for the conventions, running a skill against a
-remote server, and the evals.
+Other agents take a copy or link of a skill's folder, and the scripts run on their own:
+
+```console
+$ python3 skills/check-coordinates/scripts/check_coordinates.py observations.csv --bbox 35,-84,37,-81
+```
+
+See [skills/README.md](skills/README.md) for the conventions, other ways to install,
+running a skill against a remote server, and the evals.
 
 ## Benchmarks
 
