@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Radius and nearest results were wrong in every earlier release.** Distances were computed
+> with latitude and longitude swapped, so `GET /query` with `radius=` or `nearest=`, the Python
+> `query_radius()` and `query_nearest()`, and every `_distance_km` value returned the wrong rows
+> and the wrong distances. For example, a 6.08 km radius on the bundled test data returned 14
+> rows where 4 are within range. If you used radius or nearest results, or `_distance_km`, from
+> an earlier version, rerun those queries on this release. Bounding-box (`bbox=`),
+> point-in-polygon (`/query/within`) and `/geometry/*` results were not affected. Details:
+> [#62](https://github.com/jmcmeen/terrana/issues/62).
+
 ### Added
 
 - Release binaries for Linux arm64 (`aarch64-unknown-linux-gnu`) and Windows x86_64
