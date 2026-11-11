@@ -44,8 +44,10 @@ jobs:
           # runner — those are scarce (hours-long queues) and being retired by GitHub.
           # arm64 -> x86_64 is the easy cross-direction: Apple's clang/SDK ships both
           # arch slices, so the bundled DuckDB C++ builds for x86_64 from the arm64 host.
-          - { os: macos-latest,   target: aarch64, manylinux: "" }
-          - { os: macos-latest,   target: x86_64,  manylinux: "" }
+          # DuckDB 2.0 uses aligned deallocation, which needs macOS 10.13; maturin's
+          # x86_64 default is 10.12. arm64 macOS starts at 11.0.
+          - { os: macos-latest,   target: aarch64, manylinux: "", macos: "11.0" }
+          - { os: macos-latest,   target: x86_64,  manylinux: "", macos: "10.13" }
           - { os: windows-latest, target: x64,     manylinux: "" }
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +64,9 @@ jobs:
           grep -m1 '^version' python/Cargo.toml
 
       - uses: PyO3/maturin-action@v1
+        env:
+          # Only the macOS entries set it; elsewhere it's empty and unused.
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform.macos }}
         with:
           command: build
           args: --release --out dist

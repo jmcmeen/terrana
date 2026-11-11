@@ -37,6 +37,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - run: cargo clippy --all-targets -- -D warnings
 
   fmt:
@@ -58,6 +62,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       # The integration tests start the server, which needs DuckDB's spatial
       # extension. Caching it keeps the tests off the network after the first run.
       # Keyed on the duckdb crate version alone, so other dependency bumps reuse it;
@@ -100,6 +108,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - id: duckdb
         shell: bash
         run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
@@ -130,10 +142,13 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             test: true
+            macos: "11.0"
           # Cross-compiled on the arm64 runner, as publish.yml does; built, not run.
+          # DuckDB 2.0 needs macOS 10.13 (aligned deallocation).
           - os: macos-latest
             target: x86_64-apple-darwin
             test: false
+            macos: "10.13"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             test: true
@@ -146,6 +161,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - id: duckdb
         if: matrix.test
         shell: bash
@@ -157,7 +176,11 @@ jobs:
           key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - if: matrix.test
         run: cargo test --release --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
       - run: cargo build --release --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
       - uses: actions/cache/save@v4
         if: matrix.test && github.ref == 'refs/heads/main'
         with:
@@ -167,6 +190,34 @@ jobs:
         with:
           name: terrana-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/terrana${{ runner.os == 'Windows' && '.exe' || '' }}
+
+  # The macOS x86_64 wheel is cross-compiled with its own deployment target, so build
+  # it as python-publish.yml does: a release mustn't be the first to try.
+  wheel-macos-x86_64:
+    name: Wheel (macOS x86_64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: python
+          key: wheel-macos-x86_64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
+      - uses: PyO3/maturin-action@v1
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.13"
+        with:
+          command: build
+          args: --release --out dist
+          target: x86_64
+          working-directory: python
 
   python:
     name: Python bindings (${{ matrix.os }})
@@ -188,6 +239,10 @@ jobs:
           workspaces: python
           key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - uses: astral-sh/setup-uv@v5
       # The server tests need DuckDB's spatial extension; cached as in the test job.
       - id: duckdb
