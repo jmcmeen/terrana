@@ -391,6 +391,30 @@ docker compose up --build
 
 The [docker-compose.yml](docker-compose.yml) mounts `./data` into the container and serves whatever file you point it at. Edit the `command` in the compose file to change the filename or add `--lat`/`--lon` overrides. The container binds `0.0.0.0`, so set `TERRANA_TOKEN` (see [Access control](#access-control)); the compose file passes it through from your shell or a `.env` file.
 
+## Agent skills
+
+terrana ships **agent skills** in [skills/](skills/): folders an AI agent such as Claude
+Code installs so it can drive terrana for a task, with its decisions resting on scripts
+that measure and check, not on its own judgement. `check-coordinates` counts rows with no
+point, coordinates out of range, points at (0, 0) and points outside an expected area, and
+fails above a threshold:
+
+In Claude Code, install them as a plugin from this repository's marketplace; the skill
+then runs as `/terrana:check-coordinates`:
+
+```
+/plugin install terrana --marketplace jmcmeen/terrana
+```
+
+Other agents take a copy or link of a skill's folder, and the scripts run on their own:
+
+```console
+$ python3 skills/check-coordinates/scripts/check_coordinates.py observations.csv --bbox 35,-84,37,-81
+```
+
+See [skills/README.md](skills/README.md) for the conventions, other ways to install,
+running a skill against a remote server, and the evals.
+
 ## Benchmarks
 
 Generate test datasets — simulated iNaturalist-style wildlife observations across the Southern Appalachians:
@@ -447,6 +471,7 @@ Or in prose: *Terrana (2026). Zero-config spatial API server. <https://doi.org/1
 
 ```bash
 cargo test     # unit + integration tests
+make skills-test   # the agent skills' evals (tests/skills; needs uv)
 ```
 
 The integration tests in [tests/api.rs](tests/api.rs) spawn the real binary and hit

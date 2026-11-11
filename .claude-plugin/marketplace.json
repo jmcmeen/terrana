@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "terrana",
+  "description": "Agent skills that drive terrana, the zero-config spatial API server",
+  "owner": { "name": "John McMeen", "url": "https://github.com/jmcmeen" },
+  "plugins": [
+    {
+      "name": "terrana",
+      "source": "./skills",
+      "skills": ["./"],
+      "description": "Skills for checking and querying point datasets with terrana (needs the terrana binary or `pip install terrana`)",
+      "category": "data",
+      "tags": ["geospatial", "gis", "data-quality"]
+    }
+  ]
+}

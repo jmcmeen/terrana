@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Agent skills in `skills/`: folders an AI agent such as Claude Code installs so it can drive
+  terrana for a task, with decisions resting on scripts that measure and check. The first,
+  `check-coordinates`, counts rows with no point, coordinates out of range, points at (0, 0)
+  and points outside an expected area, and fails (exit 2) when the flagged share is above a
+  threshold (an empty dataset fails too; a box may cross the antimeridian). Scripts start
+  `terrana serve` on a file or use a running server (`TERRANA_URL`,
+  `TERRANA_TOKEN`); `skills/README.md` gives the conventions, and each skill has an eval in
+  `tests/skills/` that CI runs. In Claude Code, install them all as a plugin:
+  `/plugin install terrana --marketplace jmcmeen/terrana` (#77)
+
 ## [0.3.2] - 2026-11-11
 
 ### Security

@@ -1,0 +1,13 @@
+# Lints the agent skills' Python (skills/, tests/skills/); `make skills-lint` runs it.
+# The same rules as the bioamla suite's Python packages. Skill scripts run on the
+# user's own Python, so they target 3.9.
+target-version = "py39"
+line-length = 100
+extend-exclude = ["python", "testdata"]
+
+[lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008", "C901"]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011", "E402"]

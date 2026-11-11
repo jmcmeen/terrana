@@ -4,4 +4,7 @@
 testdata/bench_*.csv
 testdata/bench_*.csv.gz
 .claude/settings.local.json
-/python/tests/__pycache__
+__pycache__/
+.ruff_cache/
+# Files a skill run writes (skills/README.md).
+/runs/
