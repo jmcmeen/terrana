@@ -10,6 +10,9 @@ on:
   # scratch. Release only follows push runs, so these never release.
   schedule:
     - cron: "17 7 * * 1,4"
+  # Run by hand on any branch: stacked PRs above the bottom one don't target main,
+  # so they get CI only this way (gh workflow run ci.yml --ref <branch>).
+  workflow_dispatch: {}
 
 concurrency:
   # A new push to a PR cancels its older run. Every other run gets its own group,

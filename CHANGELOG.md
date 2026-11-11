@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI can be run by hand on any branch (`gh workflow run ci.yml --ref <branch>`), so stacked PRs
+  above the bottom one get CI before they merge; such runs never release (#67)
 - DuckDB 2.0 (`duckdb` 1.20000), in the crate and the Python bindings. It no longer builds with the
   `zip` crate, which had four open security advisories (one critical) that couldn't be fixed on
   DuckDB 1.x. The spatial extension is downloaded again for 2.0 on first run (#52)
