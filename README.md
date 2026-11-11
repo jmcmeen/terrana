@@ -161,11 +161,17 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 | `offset` | `offset=1000` | Rows to skip, for paging (see below) |
 | `format` | `format=json\|csv\|geojson` | Output format |
 
+Any column can be named, including ones with spaces or punctuation (URL-encode them:
+`select=Site%20Name`); names match whatever their case, and an unknown column is a 400.
+Because `,` separates names and clauses, a column whose name contains a comma can't be used
+in `select` or `where`, nor one containing `:` in `where`; spaces at either end of a name are
+dropped.
+
 ### Filtering
 
 `where` takes comma-separated clauses, and you can repeat it; every clause must match.
 Numbers, booleans, dates and times compare as their column's type (see `/schema`); other
-columns compare as text. Column names match whatever their case:
+columns compare as text:
 
 | Clause | Matches |
 |---|---|

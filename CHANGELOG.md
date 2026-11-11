@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Columns with spaces or punctuation in their names (`Site Name`, `Latitude (deg)`,
+  `decimal-latitude`) can be used in `select`, `where`, `group_by` and `agg`; they were refused
+  as invalid. Any name that is a column of the loaded data is accepted, matched whatever its
+  case and quoted in the SQL, so only known names reach it. A name containing `,` can't be used
+  in `select` or `where`, nor one containing `:` in `where`. `select`, `group_by` and `agg` now
+  answer an unknown column with a 400 naming it, instead of a 500 or, for `group_by` without
+  `agg`, ignoring it (#78)
 - A latitude or longitude value that isn't a number ("NA", a typo) no longer stops
   `terrana serve` from starting. The column is read as numbers and that row is left out, as
   one with a blank coordinate is; the log names the column, the number of such rows and an

@@ -656,6 +656,56 @@ fn a_header_only_csv_serves_no_rows() {
 }
 
 #[test]
+fn columns_with_spaces_and_punctuation_in_their_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "Site Name,Lat Deg,lon,count (n),\"say \"\"hi\"\"\"\n\
+         a,36.5,-82.5,3,x\nb,36.6,-82.4,5,y\nb,36.7,-82.3,1,y\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &["--lat", "Lat Deg"]);
+    let q = |query: &str| get_json(&s, &format!("/query?{query}"));
+
+    let rows = q("where=Lat%20Deg:gt:36.55&select=Site%20Name,count%20(n)");
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"Site Name": "b", "count (n)": 5},
+            {"Site Name": "b", "count (n)": 1},
+        ])
+    );
+    // Matched whatever the case; a column keeps the file's spelling, an alias the request's.
+    let rows = q("group_by=site%20name&agg=sum:COUNT%20(N)");
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"Site Name": "a", "sum_COUNT (N)": 3.0},
+            {"Site Name": "b", "sum_COUNT (N)": 6.0},
+        ])
+    );
+    // A quote in a name is part of the name, not the end of the identifier.
+    assert_eq!(
+        q("where=say%20%22hi%22:y&select=rowid")
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    for path in [
+        "/query?select=nosuch",
+        "/query?group_by=nosuch&agg=count",
+        "/query?group_by=Site%20Name&agg=sum:nosuch",
+        "/query?group_by=nosuch",
+        "/query?select=Site%20Name,",
+    ] {
+        assert_eq!(error_status(&s, path), 400, "{path}");
+    }
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [

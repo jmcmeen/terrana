@@ -58,6 +58,23 @@ pub async fn query(
         .collect();
     let conditions = filter::to_conditions(&filters, &columns, &state.db)?;
     let select_cols = parse_select(qp.select.as_deref());
+    // Every other column name must be a column too. Each is sent as typed: DuckDB
+    // matches quoted names whatever their case, and the `agg` alias keeps it.
+    let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
+    let agg_col = qp.agg.as_deref().and_then(|a| {
+        ["sum:", "avg:", "min:", "max:"]
+            .iter()
+            .find_map(|p| a.strip_prefix(p))
+    });
+    for name in select_cols
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .chain(qp.group_by.as_deref())
+        .chain(agg_col)
+    {
+        db::resolve_column(name, &names)?;
+    }
 
     // (spatial filter, extra select, order by, page size) for each kind of query.
     let (spatial, extra, order_by, page_size) = if let Some(bbox_str) = &qp.bbox {

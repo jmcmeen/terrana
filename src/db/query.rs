@@ -1,6 +1,7 @@
-//! SQL query builders and spatial filter helpers. User-supplied column names are
-//! validated via [`db::validate_column_name`] and string values are escaped before
-//! interpolation into SQL.
+//! SQL query builders and spatial filter helpers. Column names are quoted with
+//! [`db::quote_ident`], so any name is read as one identifier (the HTTP handler first
+//! checks them against the schema with [`db::resolve_column`]); string values are
+//! escaped before interpolation into SQL.
 
 use crate::db;
 use crate::db::filter::Condition;
@@ -172,7 +173,6 @@ fn run_query(
 ) -> Result<Vec<Value>, AppError> {
     // Aggregation path
     if let (Some(gb), Some(a)) = (group_by, agg) {
-        db::validate_column_name(gb)?;
         return query_aggregate(db, spatial_where, conditions, gb, a, limit, offset);
     }
 
@@ -184,10 +184,11 @@ fn run_query(
 
     let select = match select_cols {
         Some(cols) => {
-            for c in cols {
-                db::validate_column_name(c)?;
-            }
-            let mut s = cols.join(", ");
+            let mut s = cols
+                .iter()
+                .map(|c| db::quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", ");
             if let Some(extra) = extra_select {
                 s.push_str(", ");
                 s.push_str(extra);
@@ -261,38 +262,43 @@ fn query_aggregate(
     limit: usize,
     offset: Option<usize>,
 ) -> Result<Vec<Value>, AppError> {
+    let fold = |func: &str, prefix: &str, col: &str| {
+        format!(
+            "{}({}) AS {}",
+            func,
+            db::quote_ident(col),
+            db::quote_ident(&format!("{}_{}", prefix, col))
+        )
+    };
     let agg_expr = if agg == "count" {
         "COUNT(*) AS count".to_string()
     } else if let Some(col) = agg.strip_prefix("sum:") {
-        db::validate_column_name(col)?;
-        format!("SUM(\"{}\") AS sum_{}", col, col)
+        fold("SUM", "sum", col)
     } else if let Some(col) = agg.strip_prefix("avg:") {
-        db::validate_column_name(col)?;
-        format!("AVG(\"{}\") AS avg_{}", col, col)
+        fold("AVG", "avg", col)
     } else if let Some(col) = agg.strip_prefix("min:") {
-        db::validate_column_name(col)?;
-        format!("MIN(\"{}\") AS min_{}", col, col)
+        fold("MIN", "min", col)
     } else if let Some(col) = agg.strip_prefix("max:") {
-        db::validate_column_name(col)?;
-        format!("MAX(\"{}\") AS max_{}", col, col)
+        fold("MAX", "max", col)
     } else {
         "COUNT(*) AS count".to_string()
     };
+    let gb = db::quote_ident(group_by);
 
     let table2 = if spatial_where.is_some() {
         "raw_data"
     } else {
         "data"
     };
-    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
+    let mut sql = format!("SELECT {}, {} FROM {}", gb, agg_expr, table2);
 
     sql.push_str(&where_clause(spatial_where, conditions));
 
-    sql.push_str(&format!(" GROUP BY \"{}\"", group_by));
+    sql.push_str(&format!(" GROUP BY {}", gb));
     match offset {
         Some(off) => {
             // Groups are unique, so ordering by the group column alone is stable.
-            sql.push_str(&format!(" ORDER BY \"{}\"", group_by));
+            sql.push_str(&format!(" ORDER BY {}", gb));
             sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, off));
         }
         None => sql.push_str(&format!(" LIMIT {}", limit)),
@@ -311,12 +317,12 @@ pub fn query_points_in_bbox(
     max_lat: f64,
     max_lon: f64,
 ) -> Result<Vec<(f64, f64)>, AppError> {
-    db::validate_column_name(lat_col)?;
-    db::validate_column_name(lon_col)?;
     let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
     let sql = format!(
-        "SELECT \"{}\", \"{}\" FROM raw_data WHERE {}",
-        lat_col, lon_col, filter
+        "SELECT {}, {} FROM raw_data WHERE {}",
+        db::quote_ident(lat_col),
+        db::quote_ident(lon_col),
+        filter
     );
     let conn = db::lock_db(db)?;
     let mut stmt = conn

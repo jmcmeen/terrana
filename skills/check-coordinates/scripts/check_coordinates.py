@@ -81,8 +81,8 @@ def check(srv: Server, box: Box | None, max_fraction: float, examples: int) -> d
     schema = srv.get("/schema")
     lat, lon = schema["lat_column"], schema["lon_column"]
     rows = schema["row_count"]
-    # Fetch only what the checks need. terrana's `select` takes only plain names, so
-    # for any other coordinate column name, fetch whole rows.
+    # Fetch only what the checks need. Older terrana's `select` takes only plain names,
+    # and none takes a name with a comma, so for any other name fetch whole rows.
     plain = all(re.fullmatch(r"\w+", c) for c in (lat, lon))
     params = [("select", f"rowid,{lat},{lon}")] if plain else []
 
