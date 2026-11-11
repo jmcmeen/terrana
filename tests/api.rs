@@ -771,6 +771,24 @@ fn an_aggregate_named_like_the_group_column_takes_an_underscore() {
 }
 
 #[test]
+fn agg_must_be_a_supported_form() {
+    let s = spawn(&[]);
+    for path in [
+        "/query?group_by=species&agg=median:count",
+        "/query?group_by=species&agg=sum",
+        "/query?group_by=species&agg=count:count",
+        "/query?group_by=species&agg=sum:",
+    ] {
+        assert_eq!(error_status(&s, path), 400, "{path}");
+    }
+    // The function matches whatever its case, spaces around it dropped.
+    let rows = get_json(&s, "/query?group_by=species&agg=SUM:count&limit=1");
+    assert!(rows[0].get("sum_count").is_some(), "{rows}");
+    let rows = get_json(&s, "/query?group_by=species&agg=%20Count%20&limit=1");
+    assert!(rows[0].get("count").is_some(), "{rows}");
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [

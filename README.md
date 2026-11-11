@@ -156,7 +156,7 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 | `select` | `select=species,observed_on` | Column allowlist |
 | `where` | `where=count:gte:5` | Filters: equality, comparisons, ranges, lists, null tests (repeatable; see below) |
 | `group_by` | `group_by=species` | Group column |
-| `agg` | `agg=count` or `agg=sum:count` | Aggregation |
+| `agg` | `agg=count` or `agg=sum:count` | Aggregation with `group_by`: `count`, `sum:col`, `avg:col`, `min:col` or `max:col` (anything else is a 400) |
 | `limit` | `limit=500` | Max rows (default 1000, cap 100000) |
 | `offset` | `offset=1000` | Rows to skip, for paging (see below) |
 | `format` | `format=json\|csv\|geojson` | Output format |

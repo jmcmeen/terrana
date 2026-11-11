@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
   take the header's spelling, so `/schema` reports the real column and GeoJSON output and
   `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- An `agg` that isn't `count`, `sum:`, `avg:`, `min:` or `max:` (`agg=median:count`) is a 400
+  listing the forms when given with `group_by`; it silently counted rows. The function matches
+  whatever its case (`SUM:count`) (#90)
 - Grouping by a column named like the aggregate (`group_by=count&agg=count`, or `sum_x` with
   `agg=sum:x`) lost the group value, since both had one key; the aggregate is now named with a
   leading `_` (`_count`) in that case (#83)

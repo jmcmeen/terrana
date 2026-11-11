@@ -253,18 +253,27 @@ fn order_clause(order_by: Option<&str>) -> String {
     }
 }
 
-/// An `agg` value as (SQL function, column): `sum:col`, `avg:col`, `min:col` or
-/// `max:col`; `count`, and any other value, counts rows.
-pub fn parse_agg(agg: &str) -> (&'static str, Option<&str>) {
-    [
-        ("sum:", "SUM"),
-        ("avg:", "AVG"),
-        ("min:", "MIN"),
-        ("max:", "MAX"),
-    ]
-    .iter()
-    .find_map(|(prefix, func)| agg.strip_prefix(prefix).map(|col| (*func, Some(col))))
-    .unwrap_or(("COUNT", None))
+/// An `agg` value as (SQL function, column): `count`, or `sum:col`, `avg:col`,
+/// `min:col` or `max:col`, the function matched whatever its case; spaces around
+/// either part are dropped.
+pub fn parse_agg(agg: &str) -> Result<(&'static str, Option<&str>), AppError> {
+    let agg = agg.trim();
+    if agg.eq_ignore_ascii_case("count") {
+        return Ok(("COUNT", None));
+    }
+    let func = agg.split_once(':').and_then(|(name, col)| {
+        ["SUM", "AVG", "MIN", "MAX"]
+            .into_iter()
+            .find(|f| f.eq_ignore_ascii_case(name.trim()))
+            .zip(Some(col.trim()).filter(|c| !c.is_empty()))
+    });
+    match func {
+        Some((func, col)) => Ok((func, Some(col))),
+        None => Err(AppError::BadRequest(format!(
+            "Invalid agg '{}'. Use count, sum:col, avg:col, min:col or max:col",
+            agg
+        ))),
+    }
 }
 
 fn query_aggregate(
@@ -276,7 +285,7 @@ fn query_aggregate(
     limit: usize,
     offset: Option<usize>,
 ) -> Result<Vec<Value>, AppError> {
-    let (func, col) = parse_agg(agg);
+    let (func, col) = parse_agg(agg)?;
     let (arg, mut alias) = match col {
         Some(col) => (
             db::quote_ident(col),
@@ -486,6 +495,16 @@ mod tests {
             bbox_point_filter(35.0, -84.0, 37.0, -81.0),
             "ST_X(geom) BETWEEN -84 AND -81 AND ST_Y(geom) BETWEEN 35 AND 37"
         );
+    }
+
+    #[test]
+    fn parse_agg_takes_the_supported_forms_only() {
+        assert_eq!(parse_agg(" Count ").unwrap(), ("COUNT", None));
+        assert_eq!(parse_agg("Sum: n ").unwrap(), ("SUM", Some("n")));
+        for bad in ["median:n", "sum", "sum:", "count:n", ""] {
+            let err = parse_agg(bad).unwrap_err().to_string();
+            assert!(err.contains("Use count, sum:col"), "{bad}: {err}");
+        }
     }
 
     #[test]
