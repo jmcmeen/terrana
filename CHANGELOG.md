@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
   take the header's spelling, so `/schema` reports the real column and GeoJSON output and
   `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- Grouping by a column named like the aggregate (`group_by=count&agg=count`, or `sum_x` with
+  `agg=sum:x`) lost the group value, since both had one key; the aggregate is now named with a
+  leading `_` (`_count`) in that case (#83)
 - `/geometry/dissolve`'s `by` matches a column whatever its case, and an unknown column is a
   400; it grouped every point under `null` (#84)
 - Columns with spaces or punctuation in their names (`Site Name`, `Latitude (deg)`,

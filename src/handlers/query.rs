@@ -61,11 +61,7 @@ pub async fn query(
     // Every other column name must be a column too. Each is sent as typed: DuckDB
     // matches quoted names whatever their case, and the `agg` alias keeps it.
     let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
-    let agg_col = qp.agg.as_deref().and_then(|a| {
-        ["sum:", "avg:", "min:", "max:"]
-            .iter()
-            .find_map(|p| a.strip_prefix(p))
-    });
+    let agg_col = qp.agg.as_deref().and_then(|a| db::query::parse_agg(a).1);
     for name in select_cols
         .iter()
         .flatten()

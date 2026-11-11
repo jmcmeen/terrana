@@ -253,6 +253,20 @@ fn order_clause(order_by: Option<&str>) -> String {
     }
 }
 
+/// An `agg` value as (SQL function, column): `sum:col`, `avg:col`, `min:col` or
+/// `max:col`; `count`, and any other value, counts rows.
+pub fn parse_agg(agg: &str) -> (&'static str, Option<&str>) {
+    [
+        ("sum:", "SUM"),
+        ("avg:", "AVG"),
+        ("min:", "MIN"),
+        ("max:", "MAX"),
+    ]
+    .iter()
+    .find_map(|(prefix, func)| agg.strip_prefix(prefix).map(|col| (*func, Some(col))))
+    .unwrap_or(("COUNT", None))
+}
+
 fn query_aggregate(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
@@ -262,27 +276,20 @@ fn query_aggregate(
     limit: usize,
     offset: Option<usize>,
 ) -> Result<Vec<Value>, AppError> {
-    let fold = |func: &str, prefix: &str, col: &str| {
-        format!(
-            "{}({}) AS {}",
-            func,
+    let (func, col) = parse_agg(agg);
+    let (arg, mut alias) = match col {
+        Some(col) => (
             db::quote_ident(col),
-            db::quote_ident(&format!("{}_{}", prefix, col))
-        )
+            format!("{}_{}", func.to_lowercase(), col),
+        ),
+        None => ("*".to_string(), "count".to_string()),
     };
-    let agg_expr = if agg == "count" {
-        "COUNT(*) AS count".to_string()
-    } else if let Some(col) = agg.strip_prefix("sum:") {
-        fold("SUM", "sum", col)
-    } else if let Some(col) = agg.strip_prefix("avg:") {
-        fold("AVG", "avg", col)
-    } else if let Some(col) = agg.strip_prefix("min:") {
-        fold("MIN", "min", col)
-    } else if let Some(col) = agg.strip_prefix("max:") {
-        fold("MAX", "max", col)
-    } else {
-        "COUNT(*) AS count".to_string()
-    };
+    // A row can't hold two keys of one name: grouping by a column called `count` (or
+    // `sum_x` with `sum:x`) would lose the group value, so the aggregate takes a `_`.
+    if alias.eq_ignore_ascii_case(group_by) {
+        alias.insert(0, '_');
+    }
+    let agg_expr = format!("{}({}) AS {}", func, arg, db::quote_ident(&alias));
     let gb = db::quote_ident(group_by);
 
     let table2 = if spatial_where.is_some() {

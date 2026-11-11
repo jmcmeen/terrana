@@ -167,6 +167,10 @@ Because `,` separates names and clauses, a column whose name contains a comma ca
 in `select` or `where`, nor one containing `:` in `where`; spaces at either end of a name are
 dropped.
 
+An aggregate's result is named `count`, `sum_<col>`, `avg_<col>`, `min_<col>` or `max_<col>`;
+when that is the group column's own name (`group_by=count&agg=count`), it takes a leading `_`
+(`_count`) so the group value isn't lost.
+
 ### Filtering
 
 `where` takes comma-separated clauses, and you can repeat it; every clause must match.

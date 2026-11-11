@@ -746,6 +746,31 @@ fn column_names_resolve_to_the_files_spelling() {
 }
 
 #[test]
+fn an_aggregate_named_like_the_group_column_takes_an_underscore() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "lat,lon,count,sum_n,n\n36.5,-82.5,2,a,1\n36.6,-82.4,2,a,4\n36.7,-82.3,5,b,2\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(
+        get_json(&s, "/query?group_by=count&agg=count"),
+        serde_json::json!([{"count": 2, "_count": 2}, {"count": 5, "_count": 1}])
+    );
+    assert_eq!(
+        get_json(&s, "/query?group_by=SUM_N&agg=sum:n"),
+        serde_json::json!([{"sum_n": "a", "_sum_n": 5.0}, {"sum_n": "b", "_sum_n": 2.0}])
+    );
+    // No clash, no underscore.
+    assert_eq!(
+        get_json(&s, "/query?group_by=sum_n&agg=count"),
+        serde_json::json!([{"sum_n": "a", "count": 2}, {"sum_n": "b", "count": 1}])
+    );
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [
