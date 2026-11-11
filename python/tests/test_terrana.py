@@ -16,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -171,6 +172,31 @@ def _wait_healthy(port):
             pass
         time.sleep(0.3)
     raise AssertionError("embedded server did not become healthy")
+
+
+def test_shutdown_from_several_threads(session):
+    port = _free_port()
+    server = session.serve_background(port=port)
+    _wait_healthy(port)
+    start = threading.Barrier(4)
+    errors = []
+
+    def stop():
+        start.wait()
+        try:
+            server.shutdown()
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=stop) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert errors == []
+    # Every call returns only once the server has stopped.
+    with pytest.raises(Exception):
+        _get(port, "/health", 1)
 
 
 def _status(port, path, headers=None, method="GET"):
