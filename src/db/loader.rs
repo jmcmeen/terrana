@@ -168,32 +168,33 @@ pub fn detect_lat_lon(
     let col_lower: Vec<String> = col_names.iter().map(|c| c.to_lowercase()).collect();
 
     let lat_col = if let Some(l) = lat_override {
-        if !col_lower.contains(&l.to_lowercase()) {
-            return Err(AppError::ColumnNotFound(format!(
-                "'{}'. Available: {}",
-                l,
-                col_names.join(", ")
-            )));
-        }
-        l.to_string()
+        named_column(col_names, l)?
     } else {
         detect_column(col_names, &col_lower, LAT_CANDIDATES, "latitude")?
     };
 
     let lon_col = if let Some(l) = lon_override {
-        if !col_lower.contains(&l.to_lowercase()) {
-            return Err(AppError::ColumnNotFound(format!(
-                "'{}'. Available: {}",
-                l,
-                col_names.join(", ")
-            )));
-        }
-        l.to_string()
+        named_column(col_names, l)?
     } else {
         detect_column(col_names, &col_lower, LON_CANDIDATES, "longitude")?
     };
 
     Ok((lat_col, lon_col))
+}
+
+/// The header's own spelling of the column an override names (matched as DuckDB
+/// matches identifiers), so rows can be read by it; an error listing the columns
+/// if there's none.
+fn named_column(col_names: &[String], name: &str) -> Result<String, AppError> {
+    let names: Vec<&str> = col_names.iter().map(String::as_str).collect();
+    match crate::db::resolve_column(name, &names) {
+        Ok(i) => Ok(col_names[i].clone()),
+        Err(_) => Err(AppError::ColumnNotFound(format!(
+            "'{}'. Available: {}",
+            name,
+            col_names.join(", ")
+        ))),
+    }
 }
 
 fn detect_column(
@@ -232,11 +233,9 @@ pub fn add_spatial_index(
     let (lat, lon) = (quote_ident(lat_col), quote_ident(lon_col));
     let mut casts = Vec::new();
     for col in [lat_col, lon_col] {
-        let (name, dtype) = column_type(conn, col)?;
-        if dtype == "VARCHAR" {
-            warn_unparsed(conn, &name)?;
-            // The header's spelling, so the column keeps its name.
-            let q = quote_ident(&name);
+        if column_type(conn, col)? == "VARCHAR" {
+            warn_unparsed(conn, col)?;
+            let q = quote_ident(col);
             casts.push(format!("TRY_CAST({q} AS DOUBLE) AS {q}"));
         }
     }
@@ -295,14 +294,14 @@ pub fn add_spatial_index(
     Ok(())
 }
 
-/// The name and DuckDB type of `raw_data`'s column `col`, matched case-insensitively
-/// as DuckDB matches identifiers (`--lat latitude` names a `Latitude` column).
-fn column_type(conn: &duckdb::Connection, col: &str) -> Result<(String, String), AppError> {
+/// The DuckDB type of `raw_data`'s column `col` (its exact name: overrides take the
+/// header's spelling in [`detect_lat_lon`]).
+fn column_type(conn: &duckdb::Connection, col: &str) -> Result<String, AppError> {
     conn.query_row(
-        "SELECT column_name, data_type FROM information_schema.columns \
-         WHERE table_name = 'raw_data' AND lower(column_name) = lower(?) LIMIT 1",
+        "SELECT data_type FROM information_schema.columns \
+         WHERE table_name = 'raw_data' AND column_name = ?",
         [col],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Column type error for '{}': {}", col, e)))
 }
@@ -408,6 +407,17 @@ mod tests {
             detect_lat_lon(&cols(&["lat", "latitude", "lon", "longitude"]), None, None).unwrap();
         assert_eq!(lat, "latitude");
         assert_eq!(lon, "longitude");
+    }
+
+    #[test]
+    fn an_override_takes_the_headers_spelling() {
+        let (lat, lon) = detect_lat_lon(
+            &cols(&["Latitude", "Longitude"]),
+            Some("latitude"),
+            Some("LONGITUDE"),
+        )
+        .unwrap();
+        assert_eq!((lat.as_str(), lon.as_str()), ("Latitude", "Longitude"));
     }
 
     #[test]

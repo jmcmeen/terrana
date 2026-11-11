@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
+  take the header's spelling, so `/schema` reports the real column and GeoJSON output and
+  `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- `/geometry/dissolve`'s `by` matches a column whatever its case, and an unknown column is a
+  400; it grouped every point under `null` (#84)
 - Columns with spaces or punctuation in their names (`Site Name`, `Latitude (deg)`,
   `decimal-latitude`) can be used in `select`, `where`, `group_by` and `agg`; they were refused
   as invalid. Any name that is a column of the loaded data is accepted, matched whatever its

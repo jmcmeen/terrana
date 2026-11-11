@@ -116,10 +116,10 @@ pub fn to_conditions(
     columns: &[(&str, &str)],
     db: &Mutex<Connection>,
 ) -> Result<Vec<Condition>, AppError> {
+    let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
     filters
         .iter()
         .map(|f| {
-            let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
             let (name, dtype) = columns[db::resolve_column(&f.column, &names)?];
             let (sql, casts) = render(f, name, dtype)?;
             for (value, ty) in casts {

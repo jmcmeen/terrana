@@ -706,6 +706,46 @@ fn columns_with_spaces_and_punctuation_in_their_names() {
 }
 
 #[test]
+fn column_names_resolve_to_the_files_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "Site,Latitude,Longitude\na,36.5,-82.5\na,36.6,-82.4\na,36.5,-82.3\n",
+    )
+    .unwrap();
+    let s = spawn_file(
+        path.to_str().unwrap(),
+        &["--lat", "latitude", "--lon", "LONGITUDE"],
+    );
+    let schema = get_json(&s, "/schema");
+    assert_eq!(
+        (&schema["lat_column"], &schema["lon_column"]),
+        (
+            &serde_json::json!("Latitude"),
+            &serde_json::json!("Longitude")
+        )
+    );
+    let geojson = get_json(&s, "/query?format=geojson");
+    assert_eq!(geojson["features"].as_array().unwrap().len(), 3);
+
+    let dissolve = |by: &str| {
+        ureq::post(s.url("/geometry/dissolve"))
+            .send_json(serde_json::json!({"by": by, "include_count": true}))
+    };
+    let out: serde_json::Value = dissolve("site").unwrap().body_mut().read_json().unwrap();
+    let props = &out["features"][0]["properties"];
+    assert_eq!(
+        (&props["Site"], &props["count"]),
+        (&serde_json::json!("a"), &serde_json::json!(3))
+    );
+    match dissolve("nosuch") {
+        Err(ureq::Error::StatusCode(code)) => assert_eq!(code, 400),
+        other => panic!("an unknown column should be a 400, got {other:?}"),
+    }
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [

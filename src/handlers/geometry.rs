@@ -170,7 +170,17 @@ pub async fn dissolve(
         )?
     };
 
+    // Read after the query, as close to its rows as possible (a --watch reload can
+    // swap the schema). Rows are keyed by the column's own spelling; `by` matches it
+    // whatever its case.
     let snap = state.snapshot();
+    let names: Vec<&str> = snap
+        .schema
+        .columns
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    let by = names[db::resolve_column(by, &names)?];
     let lat_col = &snap.schema.lat_col;
     let lon_col = &snap.schema.lon_col;
     let mut groups: HashMap<String, Vec<Point<f64>>> = HashMap::new();
