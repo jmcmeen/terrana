@@ -6,7 +6,6 @@
 //! response. All geodesic math lives in `crate::geometry`, never here.
 
 use crate::db;
-use crate::db::query::MAX_RESULT_LIMIT;
 use crate::error::AppError;
 use crate::geometry;
 use crate::server::AppState;
@@ -14,7 +13,6 @@ use axum::extract::State;
 use axum::Json;
 use geo_types::{Geometry, Point, Polygon};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::convert::TryInto;
 
 pub async fn area(
@@ -146,33 +144,7 @@ pub async fn dissolve(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let rows = if let Some(query) = body.get("query") {
-        let (min_lat, min_lon, max_lat, max_lon) = parse_bbox(query)?;
-        db::query::query_rows_in_bbox(
-            &state.db,
-            min_lat,
-            min_lon,
-            max_lat,
-            max_lon,
-            MAX_RESULT_LIMIT,
-        )?
-    } else {
-        db::query::query(
-            &state.db,
-            Some(db::query::HAS_POINT),
-            &[],
-            None,
-            None,
-            None,
-            MAX_RESULT_LIMIT,
-            None,
-            None,
-        )?
-    };
-
-    // Read after the query, as close to its rows as possible (a --watch reload can
-    // swap the schema). Rows are keyed by the column's own spelling; `by` matches it
-    // whatever its case.
+    // Rows are keyed by the column's own spelling; `by` matches it whatever its case.
     let snap = state.snapshot();
     let names: Vec<&str> = snap
         .schema
@@ -181,28 +153,24 @@ pub async fn dissolve(
         .map(|c| c.name.as_str())
         .collect();
     let by = names[db::resolve_column(by, &names)?];
-    let lat_col = &snap.schema.lat_col;
-    let lon_col = &snap.schema.lon_col;
-    let mut groups: HashMap<String, Vec<Point<f64>>> = HashMap::new();
 
-    for row in &rows {
-        let key = row
-            .get(by)
-            .map(|v| match v {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            })
-            .unwrap_or_else(|| "null".to_string());
-
-        let lat = row.get(lat_col).and_then(|v| v.as_f64());
-        let lon = row.get(lon_col).and_then(|v| v.as_f64());
-
-        if let (Some(lat), Some(lon)) = (lat, lon) {
-            groups.entry(key).or_default().push(Point::new(lon, lat));
+    // Grouped in DuckDB, so every row with a point counts (no row limit), and a null,
+    // the text "null", 1 and "1" are separate groups.
+    let filter = match body.get("query") {
+        Some(query) => {
+            let (min_lat, min_lon, max_lat, max_lon) = parse_bbox(query)?;
+            db::query::bbox_filter(min_lat, min_lon, max_lat, max_lon)
         }
-    }
+        None => "TRUE".to_string(),
+    };
+    let groups = db::query::group_points(&state.db, by, &filter)?;
 
-    let features = geometry::dissolve::dissolve_by(&groups, by, include_area, include_count);
+    let features = geometry::dissolve::dissolve_groups(
+        groups.iter().map(|(k, pts)| (k.clone(), pts.as_slice())),
+        by,
+        include_area,
+        include_count,
+    );
 
     Ok(Json(json!({
         "type": "FeatureCollection",

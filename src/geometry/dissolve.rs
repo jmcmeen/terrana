@@ -34,6 +34,32 @@ pub fn dissolve_by(
     include_area: bool,
     include_count: bool,
 ) -> Vec<Value> {
+    dissolve_groups(
+        groups.iter().map(|(k, pts)| (json!(k), pts.as_slice())),
+        by,
+        include_area,
+        include_count,
+    )
+}
+
+/// Like [`dissolve_by`], with each group's key as a JSON value (a number, a string,
+/// `null`, ...), stored as is under `by`. Features come out in the groups' order.
+///
+/// ```
+/// use geo_types::Point;
+/// use serde_json::{json, Value};
+/// use terrana::geometry::dissolve::dissolve_groups;
+///
+/// let tri = vec![Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, 1.0)];
+/// let features = dissolve_groups([(Value::Null, tri.as_slice())], "kind", false, false);
+/// assert_eq!(features[0]["properties"]["kind"], json!(null));
+/// ```
+pub fn dissolve_groups<'a>(
+    groups: impl IntoIterator<Item = (Value, &'a [Point<f64>])>,
+    by: &str,
+    include_area: bool,
+    include_count: bool,
+) -> Vec<Value> {
     let mut features = Vec::new();
     for (key, pts) in groups {
         if pts.len() < 3 {
@@ -43,7 +69,7 @@ pub fn dissolve_by(
         let hull_geojson: geojson::Geometry = (&result.hull).into();
 
         let mut props = serde_json::Map::new();
-        props.insert(by.to_string(), json!(key));
+        props.insert(by.to_string(), key);
         if include_count {
             props.insert("count".to_string(), json!(pts.len()));
         }

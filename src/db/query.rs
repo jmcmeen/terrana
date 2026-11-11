@@ -385,6 +385,58 @@ pub fn query_rows_in_bbox(
     execute_query_to_json(db, &sql)
 }
 
+/// One group of points and its key, as [`group_points`] returns them.
+pub type PointGroup = (Value, Vec<geo_types::Point<f64>>);
+
+/// Every point that `where_sql` matches, grouped by column `by` in DuckDB: one
+/// (key, points) pair per group, in key order (numbers numerically, null last). The
+/// points are each row's `geom`, so only rows with a point take part; there's no row
+/// limit, and each point crosses as two doubles.
+pub fn group_points(
+    db: &Mutex<Connection>,
+    by: &str,
+    where_sql: &str,
+) -> Result<Vec<PointGroup>, AppError> {
+    let sql = format!(
+        "SELECT {by}, list(ST_X(geom)), list(ST_Y(geom)) FROM raw_data \
+         WHERE {HAS_POINT} AND ({where_sql}) GROUP BY {by} ORDER BY {by} NULLS LAST",
+        by = db::quote_ident(by),
+    );
+    let fail = |e: duckdb::Error| AppError::Internal(anyhow::anyhow!("dissolve query error: {e}"));
+    let conn = db::lock_db(db)?;
+    let mut stmt = conn.prepare(&sql).map_err(fail)?;
+    let mut rows = stmt.query([]).map_err(fail)?;
+    let key_type = rows
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No statement backing query results")))?
+        .column_type(0);
+    let doubles = |v: duckdb::types::Value| match v {
+        duckdb::types::Value::List(items) => items
+            .into_iter()
+            .map(|i| match i {
+                duckdb::types::Value::Double(d) => Ok(d),
+                other => Err(AppError::Internal(anyhow::anyhow!(
+                    "not a coordinate: {other:?}"
+                ))),
+            })
+            .collect::<Result<Vec<f64>, _>>(),
+        other => Err(AppError::Internal(anyhow::anyhow!("not a list: {other:?}"))),
+    };
+    let mut groups = Vec::new();
+    while let Some(row) = rows.next().map_err(fail)? {
+        let key = row_value_to_json(row, 0, &key_type);
+        let xs = doubles(row.get(1).map_err(fail)?)?;
+        let ys = doubles(row.get(2).map_err(fail)?)?;
+        let points = xs
+            .into_iter()
+            .zip(ys)
+            .map(|(x, y)| geo_types::Point::new(x, y))
+            .collect();
+        groups.push((key, points));
+    }
+    Ok(groups)
+}
+
 /// Execute a SQL query and return results as Vec<serde_json::Value>.
 pub fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Value>, AppError> {
     let conn = db::lock_db(db)?;

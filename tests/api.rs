@@ -885,6 +885,102 @@ fn whole_number_coordinates_get_points() {
 }
 
 #[test]
+fn dissolve_uses_every_row_and_keeps_null_apart() {
+    // Past the 100,000-row result cap, and a null beside the text "null".
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    let mut csv = String::from("g,lat,lon\n");
+    for i in 0..100_005 {
+        let (lat, lon) = (
+            36.0 + (i % 100) as f64 / 100.0,
+            -82.0 - (i / 100 % 100) as f64 / 100.0,
+        );
+        csv.push_str(&format!("a,{lat},{lon}\n"));
+    }
+    for (g, lat, lon) in [
+        ("null", 36.0, -82.0),
+        ("null", 36.1, -82.0),
+        ("null", 36.0, -82.1),
+    ] {
+        csv.push_str(&format!("{g},{lat},{lon}\n"));
+    }
+    for (lat, lon) in [(35.0, -83.0), (35.1, -83.0), (35.0, -83.1)] {
+        csv.push_str(&format!(",{lat},{lon}\n"));
+    }
+    std::fs::write(&path, csv).unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({"by": "g", "include_count": true}))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    let groups: Vec<(serde_json::Value, serde_json::Value)> = out["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["properties"]["g"].clone(),
+                f["properties"]["count"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            (serde_json::json!("a"), serde_json::json!(100_005)),
+            (serde_json::json!("null"), serde_json::json!(3)),
+            (serde_json::Value::Null, serde_json::json!(3)),
+        ]
+    );
+    // With a box, every row in it.
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({
+            "by": "g", "include_count": true, "query": {"bbox": [35.9, -83.1, 37.1, -81.9]}
+        }))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    assert_eq!(out["features"][0]["properties"]["count"], 100_005);
+}
+
+#[test]
+fn dissolve_orders_numeric_groups_by_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    let mut csv = String::from("g,lat,lon\n");
+    for g in [10, 2, -1] {
+        for (lat, lon) in [(36.0, -82.0), (36.1, -82.0), (36.0, -82.1)] {
+            csv.push_str(&format!("{g},{lat},{lon}\n"));
+        }
+    }
+    std::fs::write(&path, csv).unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({"by": "g"}))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    let keys: Vec<_> = out["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["properties"]["g"].clone())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            serde_json::json!(-1),
+            serde_json::json!(2),
+            serde_json::json!(10)
+        ]
+    );
+}
+
+#[test]
 fn where_rejects_bad_values_and_unknown_columns() {
     let s = spawn(&[]);
     for path in [

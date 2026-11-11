@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Library: `geometry::dissolve::dissolve_groups`, like `dissolve_by` with each group's key as
+  a JSON value (#88)
 - Agent skills in `skills/`: folders an AI agent such as Claude Code installs so it can drive
   terrana for a task, with decisions resting on scripts that measure and check. The first,
   `check-coordinates`, counts rows with no point, coordinates out of range, points at (0, 0)
@@ -26,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
   take the header's spelling, so `/schema` reports the real column and GeoJSON output and
   `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- `/geometry/dissolve` uses every row with a point; it read at most 100,000 and silently built
+  smaller hulls and counts from those. A null group key is now JSON `null` and its own group,
+  apart from the text "null" (and the number `1` apart from the text "1"). Points are grouped
+  in DuckDB, and groups come out in key order (numbers numerically, null last) (#87, #88)
 - Rows without a point (a coordinate blank or not a number) were dropped when the spatial
   index was built, so no query returned them, though `/stats` counted them in `row_count`. They
   are now kept: plain, `where` and `group_by` queries return them, with null coordinates (a
