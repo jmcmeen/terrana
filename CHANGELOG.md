@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
 > **Python users:** this is the first release on PyPI since 0.2.12 (0.3.0's wheels didn't
 > reach PyPI). It includes 0.3.0's fix for **radius and nearest results, which were wrong in
 > every earlier release**: if you used `query_radius()`, `query_nearest()` or `_distance_km`,
@@ -261,7 +263,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a SQL-injection vector in the `--table` argument for `.duckdb` sources: the table identifier is now validated and quoted before interpolation
 - Bounding-box query parameters are now range-validated (lat ∈ [-90, 90], lon ∈ [-180, 180], min ≤ max)
 
-[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jmcmeen/terrana/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jmcmeen/terrana/compare/v0.2.12...v0.3.0
 [0.2.12]: https://github.com/jmcmeen/terrana/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/jmcmeen/terrana/compare/v0.2.10...v0.2.11
