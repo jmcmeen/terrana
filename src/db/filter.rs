@@ -57,8 +57,8 @@ fn parse_clause(clause: &str) -> Result<Filter, AppError> {
             clause
         ))
     })?;
+    // Checked against the schema, and quoted, in `to_conditions`.
     let column = column.trim().to_string();
-    db::validate_column_name(&column)?;
 
     let op = match rest.split_once(':') {
         Some((op, value)) => match op {
@@ -108,7 +108,7 @@ impl Condition {
 }
 
 /// Resolve each filter's column in `columns` (name, DuckDB type) and render it as
-/// a [`Condition`]. Names match case-insensitively, as DuckDB's do. Date and time
+/// a [`Condition`]. Names resolve with [`db::resolve_column`]. Date and time
 /// values are checked with DuckDB's own `TRY_CAST` (a bound parameter, so the
 /// value never reaches the SQL text) before the query runs.
 pub fn to_conditions(
@@ -116,13 +116,11 @@ pub fn to_conditions(
     columns: &[(&str, &str)],
     db: &Mutex<Connection>,
 ) -> Result<Vec<Condition>, AppError> {
+    let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
     filters
         .iter()
         .map(|f| {
-            let (name, dtype) = columns
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(&f.column))
-                .ok_or_else(|| AppError::ColumnNotFound(f.column.clone()))?;
+            let (name, dtype) = columns[db::resolve_column(&f.column, &names)?];
             let (sql, casts) = render(f, name, dtype)?;
             for (value, ty) in casts {
                 check_cast(db, f, &value, ty)?;
@@ -202,8 +200,8 @@ type Cast = (String, &'static str);
 fn render(filter: &Filter, name: &str, dtype: &str) -> Result<(String, Vec<Cast>), AppError> {
     let kind = kind(dtype);
     let col = match kind {
-        Kind::Text => format!("CAST(\"{}\" AS VARCHAR)", name),
-        _ => format!("\"{}\"", name),
+        Kind::Text => format!("CAST({} AS VARCHAR)", db::quote_ident(name)),
+        _ => db::quote_ident(name),
     };
     let mut casts = Vec::new();
     let mut lit = |v: &str| -> Result<String, AppError> {
@@ -320,7 +318,23 @@ mod tests {
     fn rejects_malformed_clauses() {
         assert!(parse_where(["nocolon"]).is_err());
         assert!(parse_where(["count:between:5"]).is_err());
-        assert!(parse_where(["bad;col:1"]).is_err());
+    }
+
+    #[test]
+    fn any_schema_column_is_quoted_and_others_are_refused() {
+        let db = Mutex::new(db::create_connection().unwrap());
+        let columns = [("Lat Deg", "DOUBLE"), ("say \"hi\"", "VARCHAR")];
+        let conds = |clause: &str| to_conditions(&parse_where([clause])?, &columns, &db);
+        // The schema's spelling, matched case-insensitively.
+        assert_eq!(conds("lat deg:gt:5").unwrap()[0].sql(), "\"Lat Deg\" > 5");
+        assert_eq!(
+            conds("say \"hi\":x").unwrap()[0].sql(),
+            "CAST(\"say \"\"hi\"\"\" AS VARCHAR) = 'x'"
+        );
+        assert!(matches!(
+            conds("bad;col:1"),
+            Err(AppError::ColumnNotFound(_))
+        ));
     }
 
     fn sql(clause: &str, dtype: &str) -> String {

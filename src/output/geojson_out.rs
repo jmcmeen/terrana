@@ -13,8 +13,13 @@ pub fn to_geojson_response(rows: &[Value], state: &AppState) -> Result<Response,
         .iter()
         .filter_map(|row| {
             let obj = row.as_object()?;
-            let lat = obj.get(lat_col).and_then(|v| v.as_f64())?;
-            let lon = obj.get(lon_col).and_then(|v| v.as_f64())?;
+            let lat = obj.get(lat_col).and_then(|v| v.as_f64());
+            let lon = obj.get(lon_col).and_then(|v| v.as_f64());
+            // A row without a point is a feature with a null geometry (RFC 7946 3.2).
+            let geometry = match (lat, lon) {
+                (Some(lat), Some(lon)) => json!({"type": "Point", "coordinates": [lon, lat]}),
+                _ => Value::Null,
+            };
 
             let mut properties = serde_json::Map::new();
             for (k, v) in obj {
@@ -25,10 +30,7 @@ pub fn to_geojson_response(rows: &[Value], state: &AppState) -> Result<Response,
 
             Some(json!({
                 "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [lon, lat]
-                },
+                "geometry": geometry,
                 "properties": properties,
             }))
         })

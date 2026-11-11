@@ -216,7 +216,7 @@ impl TerranaSession {
             .detach(|| {
                 query::query(
                     &self.db,
-                    Some("geom IS NOT NULL"),
+                    Some(query::HAS_POINT),
                     &[],
                     None,
                     None,

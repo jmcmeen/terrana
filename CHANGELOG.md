@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Library: `geometry::dissolve::dissolve_groups`, like `dissolve_by` with each group's key as
+  a JSON value (#88)
 - Agent skills in `skills/`: folders an AI agent such as Claude Code installs so it can drive
   terrana for a task, with decisions resting on scripts that measure and check. The first,
   `check-coordinates`, counts rows with no point, coordinates out of range, points at (0, 0)
@@ -20,6 +22,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TERRANA_TOKEN`); `skills/README.md` gives the conventions, and each skill has an eval in
   `tests/skills/` that CI runs. In Claude Code, install them all as a plugin:
   `/plugin install terrana --marketplace jmcmeen/terrana` (#77)
+
+### Fixed
+
+- `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
+  take the header's spelling, so `/schema` reports the real column and GeoJSON output and
+  `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- `/geometry/dissolve` uses every row with a point; it read at most 100,000 and silently built
+  smaller hulls and counts from those. A null group key is now JSON `null` and its own group,
+  apart from the text "null" (and the number `1` apart from the text "1"). Points are grouped
+  in DuckDB, and groups come out in key order (numbers numerically, null last) (#87, #88)
+- Rows without a point (a coordinate blank or not a number) were dropped when the spatial
+  index was built, so no query returned them, though `/stats` counted them in `row_count`. They
+  are now kept: plain, `where` and `group_by` queries return them, with null coordinates (a
+  feature with a null geometry in GeoJSON), and spatial queries don't. The `check-coordinates`
+  skill lists their row ids under `missing_point` (#80)
+- A NaN or infinite coordinate gives its row no point, like a blank one. Such rows were given a
+  point, so `/stats` reported a `null` bbox edge and centroid, `nearest` returned them with a
+  `null` distance, and `spatial_points` counted them. The `check-coordinates` skill counts
+  them under `missing_point`, not `out_of_range` (#94)
+- `agg=sum:` on a whole-number column returns an integer (`6`, not `6.0`); a sum past the
+  64-bit range comes back as its exact digits in a string, as large unsigned values already
+  did. Whole-number `DECIMAL(p, 0)`, `HUGEINT` and `UHUGEINT` values are integers too (#82)
+- An `agg` that isn't `count`, `sum:`, `avg:`, `min:` or `max:` (`agg=median:count`) is a 400
+  listing the forms when given with `group_by`; it silently counted rows. The function matches
+  whatever its case (`SUM:count`) (#90)
+- Grouping by a column named like the aggregate (`group_by=count&agg=count`, or `sum_x` with
+  `agg=sum:x`) lost the group value, since both had one key; the aggregate is now named with a
+  leading `_` (`_count`) in that case (#83)
+- `/geometry/dissolve`'s `by` matches a column whatever its case, and an unknown column is a
+  400; it grouped every point under `null` (#84)
+- Columns with spaces or punctuation in their names (`Site Name`, `Latitude (deg)`,
+  `decimal-latitude`) can be used in `select`, `where`, `group_by` and `agg`; they were refused
+  as invalid. Any name that is a column of the loaded data is accepted, matched whatever its
+  case and quoted in the SQL, so only known names reach it. A name containing `,` can't be used
+  in `select` or `where`, nor one containing `:` in `where`. `select`, `group_by` and `agg` now
+  answer an unknown column with a 400 naming it, instead of a 500 or, for `group_by` without
+  `agg`, ignoring it (#78)
+- A latitude or longitude value that isn't a number ("NA", a typo) no longer stops
+  `terrana serve` from starting. The column is read as numbers and that row loads without a
+  point, as one with a blank coordinate does; the log names the column, the number of such
+  rows and an example. A `--lat`/`--lon` written in another case than the header still
+  works, and a header-only CSV serves no rows instead of failing the same way (#76)
 
 ## [0.3.2] - 2026-11-11
 

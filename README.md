@@ -138,6 +138,15 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 - **Lat:** `latitude`, `lat`, `y`, `ylat`, `geo_lat`
 - **Lon:** `longitude`, `lon`, `lng`, `x`, `xlon`, `xlong`, `geo_lon`, `geo_lng`
 
+### Rows without a point
+
+A row whose latitude or longitude is blank, isn't a number ("NA", a typo), or is NaN or
+infinite loads without a point. Plain, `where` and `group_by` queries return it, with null
+coordinates (a GeoJSON feature with a null geometry); spatial queries (radius, nearest, bbox,
+`/query/within`, `/geometry/*`) never match it. `/stats` counts every row in `row_count` and
+only rows with a point in `spatial_points`. A text value in a coordinate column is logged at
+startup with its column and an example.
+
 ## API Endpoints
 
 ### Spatial Queries
@@ -156,16 +165,26 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 | `select` | `select=species,observed_on` | Column allowlist |
 | `where` | `where=count:gte:5` | Filters: equality, comparisons, ranges, lists, null tests (repeatable; see below) |
 | `group_by` | `group_by=species` | Group column |
-| `agg` | `agg=count` or `agg=sum:count` | Aggregation |
+| `agg` | `agg=count` or `agg=sum:count` | Aggregation with `group_by`: `count`, `sum:col`, `avg:col`, `min:col` or `max:col` (anything else is a 400) |
 | `limit` | `limit=500` | Max rows (default 1000, cap 100000) |
 | `offset` | `offset=1000` | Rows to skip, for paging (see below) |
 | `format` | `format=json\|csv\|geojson` | Output format |
+
+Any column can be named, including ones with spaces or punctuation (URL-encode them:
+`select=Site%20Name`); names match whatever their case, and an unknown column is a 400.
+Because `,` separates names and clauses, a column whose name contains a comma can't be used
+in `select` or `where`, nor one containing `:` in `where`; spaces at either end of a name are
+dropped.
+
+An aggregate's result is named `count`, `sum_<col>`, `avg_<col>`, `min_<col>` or `max_<col>`;
+when that is the group column's own name (`group_by=count&agg=count`), it takes a leading `_`
+(`_count`) so the group value isn't lost.
 
 ### Filtering
 
 `where` takes comma-separated clauses, and you can repeat it; every clause must match.
 Numbers, booleans, dates and times compare as their column's type (see `/schema`); other
-columns compare as text. Column names match whatever their case:
+columns compare as text:
 
 | Clause | Matches |
 |---|---|

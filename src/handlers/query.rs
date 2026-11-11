@@ -57,7 +57,35 @@ pub async fn query(
         .map(|c| (c.name.as_str(), c.dtype.as_str()))
         .collect();
     let conditions = filter::to_conditions(&filters, &columns, &state.db)?;
-    let select_cols = parse_select(qp.select.as_deref());
+    let mut select_cols = parse_select(qp.select.as_deref());
+    // GeoJSON builds each geometry from the coordinate columns, so it always fetches
+    // them (they aren't repeated in the properties).
+    if format == "geojson" {
+        if let Some(cols) = select_cols.as_mut() {
+            for c in [&snapshot.schema.lat_col, &snapshot.schema.lon_col] {
+                if !cols.iter().any(|s| s.eq_ignore_ascii_case(c)) {
+                    cols.push(c.clone());
+                }
+            }
+        }
+    }
+    // Every other column name must be a column too. Each is sent as typed: DuckDB
+    // matches quoted names whatever their case, and the `agg` alias keeps it.
+    let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
+    // `agg` is used only with `group_by`, and checked only then.
+    let agg_col = match (qp.group_by.as_deref(), qp.agg.as_deref()) {
+        (Some(_), Some(a)) => db::query::parse_agg(a)?.1,
+        _ => None,
+    };
+    for name in select_cols
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .chain(qp.group_by.as_deref())
+        .chain(agg_col)
+    {
+        db::resolve_column(name, &names)?;
+    }
 
     // (spatial filter, extra select, order by, page size) for each kind of query.
     let (spatial, extra, order_by, page_size) = if let Some(bbox_str) = &qp.bbox {
@@ -69,7 +97,7 @@ pub async fn query(
         // Nearest neighbor: the K nearest, or with `offset` the next K.
         let extra = db::query::distance_select(lat, lon);
         (
-            Some("geom IS NOT NULL".to_string()),
+            Some(db::query::HAS_POINT.to_string()),
             Some(extra),
             Some("_distance_km ASC"),
             nearest.min(MAX_RESULT_LIMIT),

@@ -466,7 +466,7 @@ fn watch_reload_reflects_new_rows() {
     // Rewrite the file with two more rows; --watch should re-ingest it.
     std::fs::write(
         &path,
-        "id,latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n4,36.8,-82.2\n",
+        "id,Latitude,longitude\n1,36.5,-82.5\n2,36.6,-82.4\n3,36.7,-82.3\n4,36.8,-82.2\n",
     )
     .unwrap();
 
@@ -608,6 +608,376 @@ fn where_null_tests() {
     assert_eq!(ids(&s, "/query?where=count:notnull&select=id"), [1, 3]);
     // Like SQL, ne doesn't match nulls.
     assert_eq!(ids(&s, "/query?where=count:ne:3&select=id"), [3]);
+}
+
+#[test]
+fn coordinates_that_arent_numbers_dont_stop_the_server() {
+    // One text value makes DuckDB read the column as text; the server still starts.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "id,Latitude,longitude\n1,36.5,-82.5\n2,abc,-82\n3,NA,unknown\n4,36.7,-82.3\n",
+    )
+    .unwrap();
+    // An override in another case than the header's still names the column.
+    let s = spawn_file(path.to_str().unwrap(), &["--lat", "latitude"]);
+    let stats = get_json(&s, "/stats");
+    assert_eq!(
+        (
+            stats["row_count"].as_i64(),
+            stats["spatial_points"].as_i64()
+        ),
+        (Some(4), Some(2))
+    );
+    let schema = get_json(&s, "/schema");
+    let lat = schema["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Latitude");
+    assert_eq!(lat.unwrap()["type"], "DOUBLE");
+    // Like rows with a blank coordinate, they load without a point.
+    assert_eq!(ids(&s, "/query?select=id"), [1, 2, 3, 4]);
+    // Compared as numbers, not text.
+    assert_eq!(ids(&s, "/query?where=latitude:gt:36.6&select=id"), [4]);
+    assert_eq!(ids(&s, "/query?bbox=36,-83,37,-82&select=id"), [1, 4]);
+}
+
+#[test]
+fn a_header_only_csv_serves_no_rows() {
+    // Every column of a header-only CSV is read as text, coordinates included.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.csv");
+    std::fs::write(&path, "id,latitude,longitude\n").unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(get_json(&s, "/stats")["row_count"], 0);
+    assert_eq!(get_json(&s, "/query"), serde_json::json!([]));
+}
+
+#[test]
+fn columns_with_spaces_and_punctuation_in_their_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "Site Name,Lat Deg,lon,count (n),\"say \"\"hi\"\"\"\n\
+         a,36.5,-82.5,3,x\nb,36.6,-82.4,5,y\nb,36.7,-82.3,1,y\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &["--lat", "Lat Deg"]);
+    let q = |query: &str| get_json(&s, &format!("/query?{query}"));
+
+    let rows = q("where=Lat%20Deg:gt:36.55&select=Site%20Name,count%20(n)");
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"Site Name": "b", "count (n)": 5},
+            {"Site Name": "b", "count (n)": 1},
+        ])
+    );
+    // Matched whatever the case; a column keeps the file's spelling, an alias the request's.
+    let rows = q("group_by=site%20name&agg=sum:COUNT%20(N)");
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"Site Name": "a", "sum_COUNT (N)": 3},
+            {"Site Name": "b", "sum_COUNT (N)": 6},
+        ])
+    );
+    // A quote in a name is part of the name, not the end of the identifier.
+    assert_eq!(
+        q("where=say%20%22hi%22:y&select=rowid")
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    for path in [
+        "/query?select=nosuch",
+        "/query?group_by=nosuch&agg=count",
+        "/query?group_by=Site%20Name&agg=sum:nosuch",
+        "/query?group_by=nosuch",
+        "/query?select=Site%20Name,",
+    ] {
+        assert_eq!(error_status(&s, path), 400, "{path}");
+    }
+}
+
+#[test]
+fn column_names_resolve_to_the_files_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "Site,Latitude,Longitude\na,36.5,-82.5\na,36.6,-82.4\na,36.5,-82.3\n",
+    )
+    .unwrap();
+    let s = spawn_file(
+        path.to_str().unwrap(),
+        &["--lat", "latitude", "--lon", "LONGITUDE"],
+    );
+    let schema = get_json(&s, "/schema");
+    assert_eq!(
+        (&schema["lat_column"], &schema["lon_column"]),
+        (
+            &serde_json::json!("Latitude"),
+            &serde_json::json!("Longitude")
+        )
+    );
+    let geojson = get_json(&s, "/query?format=geojson");
+    assert_eq!(geojson["features"].as_array().unwrap().len(), 3);
+
+    let dissolve = |by: &str| {
+        ureq::post(s.url("/geometry/dissolve"))
+            .send_json(serde_json::json!({"by": by, "include_count": true}))
+    };
+    let out: serde_json::Value = dissolve("site").unwrap().body_mut().read_json().unwrap();
+    let props = &out["features"][0]["properties"];
+    assert_eq!(
+        (&props["Site"], &props["count"]),
+        (&serde_json::json!("a"), &serde_json::json!(3))
+    );
+    match dissolve("nosuch") {
+        Err(ureq::Error::StatusCode(code)) => assert_eq!(code, 400),
+        other => panic!("an unknown column should be a 400, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_aggregate_named_like_the_group_column_takes_an_underscore() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "lat,lon,count,sum_n,n\n36.5,-82.5,2,a,1\n36.6,-82.4,2,a,4\n36.7,-82.3,5,b,2\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(
+        get_json(&s, "/query?group_by=count&agg=count"),
+        serde_json::json!([{"count": 2, "_count": 2}, {"count": 5, "_count": 1}])
+    );
+    assert_eq!(
+        get_json(&s, "/query?group_by=SUM_N&agg=sum:n"),
+        serde_json::json!([{"sum_n": "a", "_sum_n": 5}, {"sum_n": "b", "_sum_n": 2}])
+    );
+    // No clash, no underscore.
+    assert_eq!(
+        get_json(&s, "/query?group_by=sum_n&agg=count"),
+        serde_json::json!([{"sum_n": "a", "count": 2}, {"sum_n": "b", "count": 1}])
+    );
+}
+
+#[test]
+fn agg_must_be_a_supported_form() {
+    let s = spawn(&[]);
+    for path in [
+        "/query?group_by=species&agg=median:count",
+        "/query?group_by=species&agg=sum",
+        "/query?group_by=species&agg=count:count",
+        "/query?group_by=species&agg=sum:",
+    ] {
+        assert_eq!(error_status(&s, path), 400, "{path}");
+    }
+    // The function matches whatever its case, spaces around it dropped.
+    let rows = get_json(&s, "/query?group_by=species&agg=SUM:count&limit=1");
+    assert!(rows[0].get("sum_count").is_some(), "{rows}");
+    let rows = get_json(&s, "/query?group_by=species&agg=%20Count%20&limit=1");
+    assert!(rows[0].get("count").is_some(), "{rows}");
+}
+
+#[test]
+fn sums_of_whole_numbers_are_integers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "lat,lon,g,n,big,x\n\
+         36.5,-82.5,a,2,9223372036854775807,1.5\n\
+         36.6,-82.4,a,3,9223372036854775807,2\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let one = |agg: &str| get_json(&s, &format!("/query?group_by=g&agg={agg}"))[0].clone();
+    assert_eq!(one("sum:n")["sum_n"], serde_json::json!(5));
+    // Past i64, the exact digits as text.
+    assert_eq!(
+        one("sum:big")["sum_big"],
+        serde_json::json!("18446744073709551614")
+    );
+    assert_eq!(one("sum:x")["sum_x"], serde_json::json!(3.5));
+    assert_eq!(one("avg:n")["avg_n"], serde_json::json!(2.5));
+}
+
+#[test]
+fn rows_without_a_point_answer_plain_queries_only() {
+    // Blank, text, NaN and infinite coordinates: no point.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "id,lat,lon,sp\n1,36.5,-82.5,a\n2,,,b\n3,abc,-82,b\n4,nan,-82,c\n5,36.7,-82.3,a\n6,inf,-82,c\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let stats = get_json(&s, "/stats");
+    assert_eq!(stats["row_count"], 6);
+    assert_eq!(stats["spatial_points"], 2);
+    assert_eq!(stats["bbox"], serde_json::json!([36.5, -82.5, 36.7, -82.3]));
+
+    assert_eq!(ids(&s, "/query?select=id"), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(ids(&s, "/query?where=sp:b&select=id"), [2, 3]);
+    assert_eq!(
+        get_json(&s, "/query?group_by=sp&agg=count"),
+        serde_json::json!([{"sp": "a", "count": 2}, {"sp": "b", "count": 2}, {"sp": "c", "count": 2}])
+    );
+    for spatial in [
+        "bbox=30,-90,40,-80",
+        "lat=36.5&lon=-82.5&radius=50km",
+        "lat=36.5&lon=-82.5&nearest=10",
+    ] {
+        assert_eq!(
+            ids(&s, &format!("/query?{spatial}&select=id")),
+            [1, 5],
+            "{spatial}"
+        );
+    }
+    let within: serde_json::Value = ureq::post(s.url("/query/within"))
+        .send_json(serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[[-90, 30], [-80, 30], [-80, 40], [-90, 40], [-90, 30]]],
+        }))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    assert_eq!(within.as_array().unwrap().len(), 2);
+
+    // GeoJSON: a feature with a null geometry.
+    let fc = get_json(&s, "/query?format=geojson&select=id,lat,lon");
+    let features = fc["features"].as_array().unwrap();
+    assert_eq!(features.len(), 6);
+    assert_eq!(features[1]["geometry"], serde_json::Value::Null);
+    assert_eq!(features[1]["properties"]["id"], 2);
+    // A select without the coordinates still gets each point.
+    let fc = get_json(&s, "/query?format=geojson&select=id");
+    assert_eq!(
+        fc["features"][0]["geometry"]["coordinates"],
+        serde_json::json!([-82.5, 36.5])
+    );
+    assert_eq!(
+        fc["features"][0]["properties"],
+        serde_json::json!({"id": 1})
+    );
+}
+
+#[test]
+fn whole_number_coordinates_get_points() {
+    // Read as BIGINT, not DOUBLE.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(&path, "id,lat,lon\n1,36,-82\n2,37,-83\n").unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(get_json(&s, "/stats")["spatial_points"], 2);
+    assert_eq!(ids(&s, "/query?bbox=35.5,-82.5,36.5,-81.5&select=id"), [1]);
+}
+
+#[test]
+fn dissolve_uses_every_row_and_keeps_null_apart() {
+    // Past the 100,000-row result cap, and a null beside the text "null".
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    let mut csv = String::from("g,lat,lon\n");
+    for i in 0..100_005 {
+        let (lat, lon) = (
+            36.0 + (i % 100) as f64 / 100.0,
+            -82.0 - (i / 100 % 100) as f64 / 100.0,
+        );
+        csv.push_str(&format!("a,{lat},{lon}\n"));
+    }
+    for (g, lat, lon) in [
+        ("null", 36.0, -82.0),
+        ("null", 36.1, -82.0),
+        ("null", 36.0, -82.1),
+    ] {
+        csv.push_str(&format!("{g},{lat},{lon}\n"));
+    }
+    for (lat, lon) in [(35.0, -83.0), (35.1, -83.0), (35.0, -83.1)] {
+        csv.push_str(&format!(",{lat},{lon}\n"));
+    }
+    std::fs::write(&path, csv).unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({"by": "g", "include_count": true}))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    let groups: Vec<(serde_json::Value, serde_json::Value)> = out["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["properties"]["g"].clone(),
+                f["properties"]["count"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            (serde_json::json!("a"), serde_json::json!(100_005)),
+            (serde_json::json!("null"), serde_json::json!(3)),
+            (serde_json::Value::Null, serde_json::json!(3)),
+        ]
+    );
+    // With a box, every row in it.
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({
+            "by": "g", "include_count": true, "query": {"bbox": [35.9, -83.1, 37.1, -81.9]}
+        }))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    assert_eq!(out["features"][0]["properties"]["count"], 100_005);
+}
+
+#[test]
+fn dissolve_orders_numeric_groups_by_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    let mut csv = String::from("g,lat,lon\n");
+    for g in [10, 2, -1] {
+        for (lat, lon) in [(36.0, -82.0), (36.1, -82.0), (36.0, -82.1)] {
+            csv.push_str(&format!("{g},{lat},{lon}\n"));
+        }
+    }
+    std::fs::write(&path, csv).unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let out: serde_json::Value = ureq::post(s.url("/geometry/dissolve"))
+        .send_json(serde_json::json!({"by": "g"}))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    let keys: Vec<_> = out["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["properties"]["g"].clone())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            serde_json::json!(-1),
+            serde_json::json!(2),
+            serde_json::json!(10)
+        ]
+    );
 }
 
 #[test]

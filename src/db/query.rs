@@ -1,12 +1,14 @@
-//! SQL query builders and spatial filter helpers. User-supplied column names are
-//! validated via [`db::validate_column_name`] and string values are escaped before
-//! interpolation into SQL.
+//! SQL query builders and spatial filter helpers. Column names are quoted with
+//! [`db::quote_ident`], so any name is read as one identifier (the HTTP handler first
+//! checks them against the schema with [`db::resolve_column`]); string values are
+//! escaped before interpolation into SQL.
 
 use crate::db;
 use crate::db::filter::Condition;
 use crate::error::AppError;
 use chrono::NaiveDate;
 use duckdb::arrow::datatypes::DataType;
+use duckdb::types::ValueRef;
 use duckdb::Connection;
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -17,6 +19,10 @@ pub const DEFAULT_LIMIT: usize = 1000;
 pub const MAX_RESULT_LIMIT: usize = 100_000;
 
 // --- Spatial SQL helpers (DuckDB spatial extension) ---
+
+/// WHERE fragment for rows with a point. A row whose coordinates are blank, not
+/// numbers, NaN or infinite has a null `geom`; spatial queries leave it out.
+pub const HAS_POINT: &str = "geom IS NOT NULL";
 
 /// WHERE fragment for bounding box using ST_Intersects (R-tree accelerated).
 pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
@@ -172,7 +178,6 @@ fn run_query(
 ) -> Result<Vec<Value>, AppError> {
     // Aggregation path
     if let (Some(gb), Some(a)) = (group_by, agg) {
-        db::validate_column_name(gb)?;
         return query_aggregate(db, spatial_where, conditions, gb, a, limit, offset);
     }
 
@@ -184,10 +189,11 @@ fn run_query(
 
     let select = match select_cols {
         Some(cols) => {
-            for c in cols {
-                db::validate_column_name(c)?;
-            }
-            let mut s = cols.join(", ");
+            let mut s = cols
+                .iter()
+                .map(|c| db::quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", ");
             if let Some(extra) = extra_select {
                 s.push_str(", ");
                 s.push_str(extra);
@@ -252,6 +258,29 @@ fn order_clause(order_by: Option<&str>) -> String {
     }
 }
 
+/// An `agg` value as (SQL function, column): `count`, or `sum:col`, `avg:col`,
+/// `min:col` or `max:col`, the function matched whatever its case; spaces around
+/// either part are dropped.
+pub fn parse_agg(agg: &str) -> Result<(&'static str, Option<&str>), AppError> {
+    let agg = agg.trim();
+    if agg.eq_ignore_ascii_case("count") {
+        return Ok(("COUNT", None));
+    }
+    let func = agg.split_once(':').and_then(|(name, col)| {
+        ["SUM", "AVG", "MIN", "MAX"]
+            .into_iter()
+            .find(|f| f.eq_ignore_ascii_case(name.trim()))
+            .zip(Some(col.trim()).filter(|c| !c.is_empty()))
+    });
+    match func {
+        Some((func, col)) => Ok((func, Some(col))),
+        None => Err(AppError::BadRequest(format!(
+            "Invalid agg '{}'. Use count, sum:col, avg:col, min:col or max:col",
+            agg
+        ))),
+    }
+}
+
 fn query_aggregate(
     db: &Mutex<Connection>,
     spatial_where: Option<&str>,
@@ -261,38 +290,36 @@ fn query_aggregate(
     limit: usize,
     offset: Option<usize>,
 ) -> Result<Vec<Value>, AppError> {
-    let agg_expr = if agg == "count" {
-        "COUNT(*) AS count".to_string()
-    } else if let Some(col) = agg.strip_prefix("sum:") {
-        db::validate_column_name(col)?;
-        format!("SUM(\"{}\") AS sum_{}", col, col)
-    } else if let Some(col) = agg.strip_prefix("avg:") {
-        db::validate_column_name(col)?;
-        format!("AVG(\"{}\") AS avg_{}", col, col)
-    } else if let Some(col) = agg.strip_prefix("min:") {
-        db::validate_column_name(col)?;
-        format!("MIN(\"{}\") AS min_{}", col, col)
-    } else if let Some(col) = agg.strip_prefix("max:") {
-        db::validate_column_name(col)?;
-        format!("MAX(\"{}\") AS max_{}", col, col)
-    } else {
-        "COUNT(*) AS count".to_string()
+    let (func, col) = parse_agg(agg)?;
+    let (arg, mut alias) = match col {
+        Some(col) => (
+            db::quote_ident(col),
+            format!("{}_{}", func.to_lowercase(), col),
+        ),
+        None => ("*".to_string(), "count".to_string()),
     };
+    // A row can't hold two keys of one name: grouping by a column called `count` (or
+    // `sum_x` with `sum:x`) would lose the group value, so the aggregate takes a `_`.
+    if alias.eq_ignore_ascii_case(group_by) {
+        alias.insert(0, '_');
+    }
+    let agg_expr = format!("{}({}) AS {}", func, arg, db::quote_ident(&alias));
+    let gb = db::quote_ident(group_by);
 
     let table2 = if spatial_where.is_some() {
         "raw_data"
     } else {
         "data"
     };
-    let mut sql = format!("SELECT \"{}\", {} FROM {}", group_by, agg_expr, table2);
+    let mut sql = format!("SELECT {}, {} FROM {}", gb, agg_expr, table2);
 
     sql.push_str(&where_clause(spatial_where, conditions));
 
-    sql.push_str(&format!(" GROUP BY \"{}\"", group_by));
+    sql.push_str(&format!(" GROUP BY {}", gb));
     match offset {
         Some(off) => {
             // Groups are unique, so ordering by the group column alone is stable.
-            sql.push_str(&format!(" ORDER BY \"{}\"", group_by));
+            sql.push_str(&format!(" ORDER BY {}", gb));
             sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, off));
         }
         None => sql.push_str(&format!(" LIMIT {}", limit)),
@@ -311,12 +338,12 @@ pub fn query_points_in_bbox(
     max_lat: f64,
     max_lon: f64,
 ) -> Result<Vec<(f64, f64)>, AppError> {
-    db::validate_column_name(lat_col)?;
-    db::validate_column_name(lon_col)?;
     let filter = bbox_filter(min_lat, min_lon, max_lat, max_lon);
     let sql = format!(
-        "SELECT \"{}\", \"{}\" FROM raw_data WHERE {}",
-        lat_col, lon_col, filter
+        "SELECT {}, {} FROM raw_data WHERE {}",
+        db::quote_ident(lat_col),
+        db::quote_ident(lon_col),
+        filter
     );
     let conn = db::lock_db(db)?;
     let mut stmt = conn
@@ -356,6 +383,58 @@ pub fn query_rows_in_bbox(
         filter, limit
     );
     execute_query_to_json(db, &sql)
+}
+
+/// One group of points and its key, as [`group_points`] returns them.
+pub type PointGroup = (Value, Vec<geo_types::Point<f64>>);
+
+/// Every point that `where_sql` matches, grouped by column `by` in DuckDB: one
+/// (key, points) pair per group, in key order (numbers numerically, null last). The
+/// points are each row's `geom`, so only rows with a point take part; there's no row
+/// limit, and each point crosses as two doubles.
+pub fn group_points(
+    db: &Mutex<Connection>,
+    by: &str,
+    where_sql: &str,
+) -> Result<Vec<PointGroup>, AppError> {
+    let sql = format!(
+        "SELECT {by}, list(ST_X(geom)), list(ST_Y(geom)) FROM raw_data \
+         WHERE {HAS_POINT} AND ({where_sql}) GROUP BY {by} ORDER BY {by} NULLS LAST",
+        by = db::quote_ident(by),
+    );
+    let fail = |e: duckdb::Error| AppError::Internal(anyhow::anyhow!("dissolve query error: {e}"));
+    let conn = db::lock_db(db)?;
+    let mut stmt = conn.prepare(&sql).map_err(fail)?;
+    let mut rows = stmt.query([]).map_err(fail)?;
+    let key_type = rows
+        .as_ref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No statement backing query results")))?
+        .column_type(0);
+    let doubles = |v: duckdb::types::Value| match v {
+        duckdb::types::Value::List(items) => items
+            .into_iter()
+            .map(|i| match i {
+                duckdb::types::Value::Double(d) => Ok(d),
+                other => Err(AppError::Internal(anyhow::anyhow!(
+                    "not a coordinate: {other:?}"
+                ))),
+            })
+            .collect::<Result<Vec<f64>, _>>(),
+        other => Err(AppError::Internal(anyhow::anyhow!("not a list: {other:?}"))),
+    };
+    let mut groups = Vec::new();
+    while let Some(row) = rows.next().map_err(fail)? {
+        let key = row_value_to_json(row, 0, &key_type);
+        let xs = doubles(row.get(1).map_err(fail)?)?;
+        let ys = doubles(row.get(2).map_err(fail)?)?;
+        let points = xs
+            .into_iter()
+            .zip(ys)
+            .map(|(x, y)| geo_types::Point::new(x, y))
+            .collect();
+        groups.push((key, points));
+    }
+    Ok(groups)
 }
 
 /// Execute a SQL query and return results as Vec<serde_json::Value>.
@@ -398,6 +477,15 @@ pub fn execute_query_to_json(db: &Mutex<Connection>, sql: &str) -> Result<Vec<Va
     Ok(rows_out)
 }
 
+/// A whole number as a JSON number when it fits in an `i64`, else its exact digits as
+/// a string: past that, many JSON readers (JavaScript's among them) would round it.
+fn int_json(v: i128) -> Value {
+    match i64::try_from(v) {
+        Ok(v) => json!(v),
+        Err(_) => json!(v.to_string()),
+    }
+}
+
 /// Extract a DuckDB row value at column index into a serde_json::Value,
 /// using the Arrow DataType to pick the right conversion.
 fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Value {
@@ -413,9 +501,22 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize, col_type: &DataType) -> Valu
             Err(_) => Value::Null,
         },
         DataType::UInt64 => match row.get::<_, u64>(idx) {
-            Ok(v) if v <= i64::MAX as u64 => json!(v),
-            Ok(v) => json!(v.to_string()),
+            Ok(v) => int_json(i128::from(v)),
             Err(_) => Value::Null,
+        },
+        // HUGEINT (DuckDB's SUM of integers), UHUGEINT and DECIMAL(p, 0) all arrive as
+        // Decimal128(38, 0); DuckDB's own value type tells them apart.
+        DataType::Decimal128(_, 0) => match row.get_ref(idx) {
+            Ok(ValueRef::HugeInt(v)) => int_json(v),
+            Ok(ValueRef::UHugeInt(v)) => i128::try_from(v)
+                .map(int_json)
+                .unwrap_or_else(|_| json!(v.to_string())),
+            Ok(ValueRef::Decimal(d)) if d.scale() == 0 => int_json(d.value()),
+            Ok(ValueRef::Null) | Err(_) => Value::Null,
+            Ok(_) => match row.get::<_, f64>(idx) {
+                Ok(v) if v.is_finite() => json!(v),
+                _ => Value::Null,
+            },
         },
         DataType::Float16
         | DataType::Float32
@@ -472,6 +573,41 @@ mod tests {
         assert_eq!(
             bbox_point_filter(35.0, -84.0, 37.0, -81.0),
             "ST_X(geom) BETWEEN -84 AND -81 AND ST_Y(geom) BETWEEN 35 AND 37"
+        );
+    }
+
+    #[test]
+    fn parse_agg_takes_the_supported_forms_only() {
+        assert_eq!(parse_agg(" Count ").unwrap(), ("COUNT", None));
+        assert_eq!(parse_agg("Sum: n ").unwrap(), ("SUM", Some("n")));
+        for bad in ["median:n", "sum", "sum:", "count:n", ""] {
+            let err = parse_agg(bad).unwrap_err().to_string();
+            assert!(err.contains("Use count, sum:col"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn whole_numbers_are_integers_and_text_past_i64() {
+        let db = Mutex::new(db::create_connection().unwrap());
+        let rows = execute_query_to_json(
+            &db,
+            "SELECT 6::HUGEINT AS h, (-9223372036854775808)::HUGEINT - 1 AS h_low, \
+             NULL::HUGEINT AS h_null, 340282366920938463463374607431768211455::UHUGEINT AS uh, \
+             12::DECIMAL(10, 0) AS d0, 1.25::DECIMAL(10, 2) AS d2, \
+             18446744073709551615::UBIGINT AS ub",
+        )
+        .unwrap();
+        assert_eq!(
+            rows[0],
+            json!({
+                "h": 6,
+                "h_low": "-9223372036854775809",
+                "h_null": null,
+                "uh": "340282366920938463463374607431768211455",
+                "d0": 12,
+                "d2": 1.25,
+                "ub": "18446744073709551615",
+            })
         );
     }
 

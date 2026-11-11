@@ -105,6 +105,27 @@ pub fn get_table_info_relation(conn: &Connection, relation: &str) -> Result<Tabl
     })
 }
 
+/// `name` as a quoted SQL identifier (`"..."`, embedded quotes doubled), so any column
+/// name, spaces and punctuation included, is read as one name.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The position in `columns` of the column `name` names: an exact match, else one
+/// whose name differs only in ASCII case, as DuckDB matches identifiers. Any name
+/// can be a column, spaces and punctuation included; one that isn't a column is an
+/// error, so only known names reach the SQL.
+pub fn resolve_column(name: &str, columns: &[&str]) -> Result<usize, AppError> {
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Empty column name not allowed".into()));
+    }
+    columns
+        .iter()
+        .position(|c| *c == name)
+        .or_else(|| columns.iter().position(|c| c.eq_ignore_ascii_case(name)))
+        .ok_or_else(|| AppError::ColumnNotFound(name.to_string()))
+}
+
 /// Validate a column name from user input (prevent SQL injection).
 pub fn validate_column_name(name: &str) -> Result<&str, AppError> {
     if name.is_empty() {
@@ -128,6 +149,27 @@ mod tests {
         assert!(validate_column_name("species").is_ok());
         assert!(validate_column_name("quality_grade").is_ok());
         assert!(validate_column_name("col1").is_ok());
+    }
+
+    #[test]
+    fn resolve_column_prefers_an_exact_match() {
+        let cols = ["Site Name", "a", "A"];
+        assert_eq!(resolve_column("site name", &cols).unwrap(), 0);
+        assert_eq!(resolve_column("A", &cols).unwrap(), 2);
+        assert!(matches!(
+            resolve_column("nosuch", &cols),
+            Err(AppError::ColumnNotFound(_))
+        ));
+        assert!(matches!(
+            resolve_column("", &cols),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn quote_ident_doubles_embedded_quotes() {
+        assert_eq!(quote_ident("Lat Deg"), "\"Lat Deg\"");
+        assert_eq!(quote_ident("a\"b"), "\"a\"\"b\"");
     }
 
     #[test]
