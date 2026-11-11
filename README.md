@@ -138,6 +138,15 @@ When `--lat` / `--lon` are omitted, column names are scanned case-insensitively:
 - **Lat:** `latitude`, `lat`, `y`, `ylat`, `geo_lat`
 - **Lon:** `longitude`, `lon`, `lng`, `x`, `xlon`, `xlong`, `geo_lon`, `geo_lng`
 
+### Rows without a point
+
+A row whose latitude or longitude is blank, isn't a number ("NA", a typo), or is NaN or
+infinite loads without a point. Plain, `where` and `group_by` queries return it, with null
+coordinates (a GeoJSON feature with a null geometry); spatial queries (radius, nearest, bbox,
+`/query/within`, `/geometry/*`) never match it. `/stats` counts every row in `row_count` and
+only rows with a point in `spatial_points`. A text value in a coordinate column is logged at
+startup with its column and an example.
+
 ## API Endpoints
 
 ### Spatial Queries

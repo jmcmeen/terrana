@@ -159,7 +159,7 @@ pub async fn dissolve(
     } else {
         db::query::query(
             &state.db,
-            None,
+            Some(db::query::HAS_POINT),
             &[],
             None,
             None,

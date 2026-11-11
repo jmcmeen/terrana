@@ -1,7 +1,7 @@
 """Check a point dataset's coordinates before it's used; flag rows that need a look.
 
-Counts rows with no point (coordinates blank or not numbers), coordinates that aren't
-finite or in range (latitude -90..90, longitude -180..180), points at exactly (0, 0), and, given
+Counts rows with no point (a coordinate blank, not a number, NaN or infinite),
+coordinates out of range (latitude -90..90, longitude -180..180), points at exactly (0, 0), and, given
 an expected ``--bbox``, valid points outside it. Writes ``report.json`` (every flagged
 row id) to ``runs/check-coordinates/<timestamp>/``. The check fails when the flagged
 share of rows is above ``--max-flagged-fraction``, or when there are no rows: an
@@ -65,7 +65,7 @@ def _box(text: str) -> Box:
 
 
 def _valid(lat, lon) -> bool:
-    """A finite latitude and longitude in range. terrana sends NaN and infinity as null."""
+    """A finite latitude and longitude in range."""
     return (
         isinstance(lat, (int, float))
         and isinstance(lon, (int, float))
@@ -86,13 +86,17 @@ def check(srv: Server, box: Box | None, max_fraction: float, examples: int) -> d
     plain = all(re.fullmatch(r"\w+", c) for c in (lat, lon))
     params = [("select", f"rowid,{lat},{lon}")] if plain else []
 
-    flags: dict[str, list[int]] = {"out_of_range": [], "null_island": []}
+    flags: dict[str, list[int]] = {"missing_point": [], "out_of_range": [], "null_island": []}
     if box:
         flags["outside_bbox"] = []
-    points = 0
+    returned = 0
     for row in srv.rows(params):
-        points += 1
+        returned += 1
         rowid, y, x = row["rowid"], row.get(lat), row.get(lon)
+        # terrana sends a blank, unparseable, NaN or infinite coordinate as null.
+        if y is None or x is None:
+            flags["missing_point"].append(rowid)
+            continue
         if not _valid(y, x):
             flags["out_of_range"].append(rowid)
             continue
@@ -101,8 +105,10 @@ def check(srv: Server, box: Box | None, max_fraction: float, examples: int) -> d
         if box and (y, x) not in box:
             flags["outside_bbox"].append(rowid)
 
-    missing = rows - points
-    flagged = missing + len(set().union(*flags.values()))
+    # Older terrana leaves rows without a point out of every query: count them too.
+    unreturned = rows - returned
+    missing = unreturned + len(flags["missing_point"])
+    flagged = unreturned + len(set().union(*flags.values()))
     fraction = flagged / rows if rows else 0.0
     passed = rows > 0 and fraction <= max_fraction
     return {
@@ -110,8 +116,8 @@ def check(srv: Server, box: Box | None, max_fraction: float, examples: int) -> d
         "lat_column": lat,
         "lon_column": lon,
         "rows": rows,
-        "with_point": points,
-        "counts": {"missing_point": missing, **{k: len(v) for k, v in flags.items()}},
+        "with_point": rows - missing,
+        "counts": {**{k: len(v) for k, v in flags.items()}, "missing_point": missing},
         "row_ids": flags,
         "examples": {k: v[:examples] for k, v in flags.items() if v},
         "flagged_rows": flagged,

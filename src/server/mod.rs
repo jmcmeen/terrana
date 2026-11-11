@@ -161,17 +161,20 @@ pub fn build_snapshot(
     })
 }
 
-/// Compute the lat/lon bounding box and the count of spatially-valid rows from
-/// the live `raw_data` table.
+/// Compute the lat/lon bounding box and the count of rows with a point from the live
+/// `raw_data` table. Needs its `geom` column, so runs after
+/// [`crate::db::loader::add_spatial_index`].
 fn compute_extent(
     conn: &Connection,
     lat_col: &str,
     lon_col: &str,
 ) -> Result<(Option<BBox>, i64), AppError> {
+    let (lat, lon) = (
+        crate::db::quote_ident(lat_col),
+        crate::db::quote_ident(lon_col),
+    );
     let mut stmt = conn.prepare(&format!(
-        "SELECT MIN(\"{lat}\"), MIN(\"{lon}\"), MAX(\"{lat}\"), MAX(\"{lon}\"), COUNT(*) FROM raw_data WHERE \"{lat}\" IS NOT NULL AND \"{lon}\" IS NOT NULL",
-        lat = lat_col,
-        lon = lon_col,
+        "SELECT MIN({lat}), MIN({lon}), MAX({lat}), MAX({lon}), COUNT(*) FROM raw_data WHERE geom IS NOT NULL",
     ))?;
     let result: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) =
         stmt.query_row([], |row| {

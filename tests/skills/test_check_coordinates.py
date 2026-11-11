@@ -63,6 +63,7 @@ def test_flags_each_kind_of_problem(run_skill, mixed, tmp_path):
         "outside_bbox": 2,
     }
     assert summary["examples"] == {
+        "missing_point": [7],
         "out_of_range": [4, 5],
         "null_island": [6],
         "outside_bbox": [3, 6],
@@ -151,11 +152,11 @@ def test_bad_arguments_exit_1_not_2(run_skill, mixed, tmp_path, args):
     assert "error" in summary
 
 
-def test_non_finite_coordinates_are_out_of_range(run_skill, tmp_path):
-    # terrana gives these rows a point but sends the coordinates as null.
+def test_non_finite_coordinates_have_no_point(run_skill, tmp_path):
     write_csv(tmp_path / "nan.csv", [("a", 36.5, -82.5), ("b", "nan", -82), ("c", 36, "inf")])
     _, summary = run_skill("check-coordinates", "check_coordinates", "nan.csv", cwd=tmp_path)
-    assert summary["examples"] == {"out_of_range": [2, 3]}
+    assert summary["examples"] == {"missing_point": [2, 3]}
+    assert summary["with_point"] == 1
 
 
 def test_coordinates_that_arent_numbers_count_as_missing(run_skill, tmp_path):
@@ -227,7 +228,7 @@ def test_rows_follow_paging(running_server, mixed):
     helper.PAGE = 2
     srv = helper.Server(running_server(mixed))
     names = [row["name"] for row in srv.rows([("select", "name")])]
-    assert names == ["ok1", "ok2", "paris", "badlat", "badlon", "null_island"]
+    assert names == ["ok1", "ok2", "paris", "badlat", "badlon", "null_island", "blank"]
 
 
 def test_every_skill_has_a_skill_md_with_name_and_description():

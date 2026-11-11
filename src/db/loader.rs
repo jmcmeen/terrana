@@ -228,8 +228,9 @@ pub fn add_spatial_index(
 
     // One value that isn't a number ("NA", a typo) makes DuckDB read the whole column
     // as text. Such a column is cast to DOUBLE (once, in a subquery); a value that
-    // doesn't parse becomes null, and the row is left out, as one with a blank
-    // coordinate is.
+    // doesn't parse becomes null. A row whose coordinates aren't both finite numbers
+    // (null, NaN, infinity) is kept with a null geom: spatial filters never match it
+    // (the R-tree skips nulls), but plain and attribute queries return it.
     let (lat, lon) = (quote_ident(lat_col), quote_ident(lon_col));
     let mut casts = Vec::new();
     for col in [lat_col, lon_col] {
@@ -247,7 +248,10 @@ pub fn add_spatial_index(
 
     // Create new table with geometry column (avoids ALTER TABLE + UPDATE crash)
     conn.execute_batch(&format!(
-        "CREATE TABLE spatial_data AS SELECT *, ST_Point({lon}, {lat}) AS geom FROM {source} WHERE {lat} IS NOT NULL AND {lon} IS NOT NULL",
+        "CREATE TABLE spatial_data AS SELECT *, \
+         CASE WHEN isfinite({lat}::DOUBLE) AND isfinite({lon}::DOUBLE) \
+         THEN ST_Point({lon}, {lat}) END AS geom \
+         FROM {source}",
     ))
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Spatial table creation error: {}", e)))?;
 
@@ -307,7 +311,7 @@ fn column_type(conn: &duckdb::Connection, col: &str) -> Result<String, AppError>
 }
 
 /// Log how many of text column `col`'s values aren't numbers, with an example, since
-/// those rows are left out.
+/// those rows load without a point.
 fn warn_unparsed(conn: &duckdb::Connection, col: &str) -> Result<(), AppError> {
     let q = quote_ident(col);
     let (count, example): (i64, Option<String>) = conn
@@ -325,7 +329,7 @@ fn warn_unparsed(conn: &duckdb::Connection, col: &str) -> Result<(), AppError> {
             column = %col,
             rows = count,
             example = %example.unwrap_or_default(),
-            "values that aren't numbers; those rows are left out"
+            "values that aren't numbers; those rows load without a point"
         );
     }
     Ok(())

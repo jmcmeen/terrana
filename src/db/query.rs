@@ -20,6 +20,10 @@ pub const MAX_RESULT_LIMIT: usize = 100_000;
 
 // --- Spatial SQL helpers (DuckDB spatial extension) ---
 
+/// WHERE fragment for rows with a point. A row whose coordinates are blank, not
+/// numbers, NaN or infinite has a null `geom`; spatial queries leave it out.
+pub const HAS_POINT: &str = "geom IS NOT NULL";
+
 /// WHERE fragment for bounding box using ST_Intersects (R-tree accelerated).
 pub fn bbox_filter(min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> String {
     format!(

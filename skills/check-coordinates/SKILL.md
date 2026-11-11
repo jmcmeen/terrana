@@ -29,12 +29,10 @@ that doesn't fill it in, use that folder's path.
   file and `--lat`/`--lon`: the script checks the data that server was started on, and
   refuses a file so it can't report on the wrong one.
 
-It prints a JSON summary: `source`, `counts` per problem (`missing_point`, a coordinate blank or not
-a number;
-`out_of_range`, which includes coordinates that aren't finite numbers; `null_island`;
-`outside_bbox`), `examples` (row ids), `flagged_rows`,
-`flagged_fraction`, `passed`, and `run_dir`, where `report.json` lists every flagged
-row id. Exit 0: passed. Exit 2: too many rows flagged, or the dataset has no rows
+It prints a JSON summary: `source`, `counts` per problem (`missing_point`, a coordinate
+blank, not a number, NaN or infinite; `out_of_range`; `null_island`; `outside_bbox`),
+`examples` (row ids), `flagged_rows`, `flagged_fraction`, `passed`, and `run_dir`, where
+`report.json` lists every flagged row id. Exit 0: passed. Exit 2: too many rows flagged, or the dataset has no rows
 (`reason` says so). Exit 1: terrana failed or the arguments were wrong
 (`{"error": ...}`); fix the call or report the error, don't treat it as a verdict.
 

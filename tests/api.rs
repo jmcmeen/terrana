@@ -637,8 +637,8 @@ fn coordinates_that_arent_numbers_dont_stop_the_server() {
         .iter()
         .find(|c| c["name"] == "Latitude");
     assert_eq!(lat.unwrap()["type"], "DOUBLE");
-    // Like rows with a blank coordinate, they're left out.
-    assert_eq!(ids(&s, "/query?select=id"), [1, 4]);
+    // Like rows with a blank coordinate, they load without a point.
+    assert_eq!(ids(&s, "/query?select=id"), [1, 2, 3, 4]);
     // Compared as numbers, not text.
     assert_eq!(ids(&s, "/query?where=latitude:gt:36.6&select=id"), [4]);
     assert_eq!(ids(&s, "/query?bbox=36,-83,37,-82&select=id"), [1, 4]);
@@ -809,6 +809,79 @@ fn sums_of_whole_numbers_are_integers() {
     );
     assert_eq!(one("sum:x")["sum_x"], serde_json::json!(3.5));
     assert_eq!(one("avg:n")["avg_n"], serde_json::json!(2.5));
+}
+
+#[test]
+fn rows_without_a_point_answer_plain_queries_only() {
+    // Blank, text, NaN and infinite coordinates: no point.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(
+        &path,
+        "id,lat,lon,sp\n1,36.5,-82.5,a\n2,,,b\n3,abc,-82,b\n4,nan,-82,c\n5,36.7,-82.3,a\n6,inf,-82,c\n",
+    )
+    .unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    let stats = get_json(&s, "/stats");
+    assert_eq!(stats["row_count"], 6);
+    assert_eq!(stats["spatial_points"], 2);
+    assert_eq!(stats["bbox"], serde_json::json!([36.5, -82.5, 36.7, -82.3]));
+
+    assert_eq!(ids(&s, "/query?select=id"), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(ids(&s, "/query?where=sp:b&select=id"), [2, 3]);
+    assert_eq!(
+        get_json(&s, "/query?group_by=sp&agg=count"),
+        serde_json::json!([{"sp": "a", "count": 2}, {"sp": "b", "count": 2}, {"sp": "c", "count": 2}])
+    );
+    for spatial in [
+        "bbox=30,-90,40,-80",
+        "lat=36.5&lon=-82.5&radius=50km",
+        "lat=36.5&lon=-82.5&nearest=10",
+    ] {
+        assert_eq!(
+            ids(&s, &format!("/query?{spatial}&select=id")),
+            [1, 5],
+            "{spatial}"
+        );
+    }
+    let within: serde_json::Value = ureq::post(s.url("/query/within"))
+        .send_json(serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[[-90, 30], [-80, 30], [-80, 40], [-90, 40], [-90, 30]]],
+        }))
+        .unwrap()
+        .body_mut()
+        .read_json()
+        .unwrap();
+    assert_eq!(within.as_array().unwrap().len(), 2);
+
+    // GeoJSON: a feature with a null geometry.
+    let fc = get_json(&s, "/query?format=geojson&select=id,lat,lon");
+    let features = fc["features"].as_array().unwrap();
+    assert_eq!(features.len(), 6);
+    assert_eq!(features[1]["geometry"], serde_json::Value::Null);
+    assert_eq!(features[1]["properties"]["id"], 2);
+    // A select without the coordinates still gets each point.
+    let fc = get_json(&s, "/query?format=geojson&select=id");
+    assert_eq!(
+        fc["features"][0]["geometry"]["coordinates"],
+        serde_json::json!([-82.5, 36.5])
+    );
+    assert_eq!(
+        fc["features"][0]["properties"],
+        serde_json::json!({"id": 1})
+    );
+}
+
+#[test]
+fn whole_number_coordinates_get_points() {
+    // Read as BIGINT, not DOUBLE.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("obs.csv");
+    std::fs::write(&path, "id,lat,lon\n1,36,-82\n2,37,-83\n").unwrap();
+    let s = spawn_file(path.to_str().unwrap(), &[]);
+    assert_eq!(get_json(&s, "/stats")["spatial_points"], 2);
+    assert_eq!(ids(&s, "/query?bbox=35.5,-82.5,36.5,-81.5&select=id"), [1]);
 }
 
 #[test]

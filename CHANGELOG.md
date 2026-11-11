@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--lat`/`--lon` written in another case than the header (`--lat latitude` for `Latitude`)
   take the header's spelling, so `/schema` reports the real column and GeoJSON output and
   `/geometry/dissolve` find the coordinates; they returned no features (#86)
+- Rows without a point (a coordinate blank or not a number) were dropped when the spatial
+  index was built, so no query returned them, though `/stats` counted them in `row_count`. They
+  are now kept: plain, `where` and `group_by` queries return them, with null coordinates (a
+  feature with a null geometry in GeoJSON), and spatial queries don't. The `check-coordinates`
+  skill lists their row ids under `missing_point` (#80)
+- A NaN or infinite coordinate gives its row no point, like a blank one. Such rows were given a
+  point, so `/stats` reported a `null` bbox edge and centroid, `nearest` returned them with a
+  `null` distance, and `spatial_points` counted them. The `check-coordinates` skill counts
+  them under `missing_point`, not `out_of_range` (#94)
 - `agg=sum:` on a whole-number column returns an integer (`6`, not `6.0`); a sum past the
   64-bit range comes back as its exact digits in a string, as large unsigned values already
   did. Whole-number `DECIMAL(p, 0)`, `HUGEINT` and `UHUGEINT` values are integers too (#82)
@@ -45,10 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer an unknown column with a 400 naming it, instead of a 500 or, for `group_by` without
   `agg`, ignoring it (#78)
 - A latitude or longitude value that isn't a number ("NA", a typo) no longer stops
-  `terrana serve` from starting. The column is read as numbers and that row is left out, as
-  one with a blank coordinate is; the log names the column, the number of such rows and an
-  example. A `--lat`/`--lon` written in another case than the header still works, and a
-  header-only CSV serves no rows instead of failing the same way (#76)
+  `terrana serve` from starting. The column is read as numbers and that row loads without a
+  point, as one with a blank coordinate does; the log names the column, the number of such
+  rows and an example. A `--lat`/`--lon` written in another case than the header still
+  works, and a header-only CSV serves no rows instead of failing the same way (#76)
 
 ## [0.3.2] - 2026-11-11
 
