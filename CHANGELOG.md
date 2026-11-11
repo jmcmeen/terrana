@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
 > **Radius and nearest results were wrong in every earlier release.** Distances were computed
 > with latitude and longitude swapped, so `GET /query` with `radius=` or `nearest=`, the Python
 > `query_radius()` and `query_nearest()`, and every `_distance_km` value returned the wrong rows
@@ -239,7 +241,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a SQL-injection vector in the `--table` argument for `.duckdb` sources: the table identifier is now validated and quoted before interpolation
 - Bounding-box query parameters are now range-validated (lat ∈ [-90, 90], lon ∈ [-180, 180], min ≤ max)
 
-[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/jmcmeen/terrana/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jmcmeen/terrana/compare/v0.2.12...v0.3.0
 [0.2.12]: https://github.com/jmcmeen/terrana/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/jmcmeen/terrana/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/jmcmeen/terrana/compare/v0.2.9...v0.2.10
