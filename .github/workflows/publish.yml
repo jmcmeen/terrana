@@ -72,6 +72,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: false
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - run: cargo build --release
       - name: Package
         run: tar czf terrana-${{ matrix.target }}.tar.gz -C target/release terrana
@@ -111,6 +115,10 @@ jobs:
         # A tag's cache can't be read by any other run; only main saves.
         with:
           save-if: false
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - run: cargo build --release --target ${{ matrix.target }}
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
@@ -167,6 +175,10 @@ jobs:
         # A tag's cache can't be read by any other run; only main saves.
         with:
           save-if: false
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       # crates.io publishes the version in Cargo.toml, not the tag — so guard that
       # they agree before publishing (versions are immutable and can't be re-pushed).
       - name: Verify Cargo.toml version matches the tag

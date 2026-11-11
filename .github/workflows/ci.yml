@@ -37,6 +37,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - run: cargo clippy --all-targets -- -D warnings
 
   fmt:
@@ -58,6 +62,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       # The integration tests start the server, which needs DuckDB's spatial
       # extension. Caching it keeps the tests off the network after the first run.
       # Keyed on the duckdb crate version alone, so other dependency bumps reuse it;
@@ -100,6 +108,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - id: duckdb
         shell: bash
         run: echo "version=$(grep -A1 '^name = "duckdb"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
@@ -145,12 +157,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      # Keyed on the deployment target too: changing it reruns libduckdb-sys's
-      # build script, which fails when its unpacked sources are already cached.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}${{ matrix.macos && format('-macos{0}', matrix.macos) || '' }}
+          key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - id: duckdb
         if: matrix.test
         shell: bash
@@ -192,6 +206,10 @@ jobs:
           workspaces: python
           key: wheel-macos-x86_64
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - uses: PyO3/maturin-action@v1
         env:
           MACOSX_DEPLOYMENT_TARGET: "10.13"
@@ -221,6 +239,10 @@ jobs:
           workspaces: python
           key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache empties these but keeps the directories, which breaks a build-script rerun (#72).
+      - name: Drop DuckDB sources from the restored cache
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources python/target/duckdb-sources python/target/*/duckdb-sources
       - uses: astral-sh/setup-uv@v5
       # The server tests need DuckDB's spatial extension; cached as in the test job.
       - id: duckdb

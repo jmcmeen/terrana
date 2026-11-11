@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because that wheel failed. DuckDB 2.0 uses aligned deallocation, which needs macOS 10.13, and
   maturin's x86_64 default was 10.12. The macOS x86_64 wheel and binary now target 10.13 (arm64
   stays at 11.0), and CI builds that wheel too (#69)
+- CI and release builds no longer fail when a restored Rust cache makes libduckdb-sys rerun its
+  build script, for example after a toolchain or Cargo.lock change (#72)
 
 ### Security
 
