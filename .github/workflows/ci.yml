@@ -145,9 +145,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Keyed on the deployment target too: changing it reruns libduckdb-sys's
+      # build script, which fails when its unpacked sources are already cached.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}${{ matrix.macos && format('-macos{0}', matrix.macos) || '' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - id: duckdb
         if: matrix.test
