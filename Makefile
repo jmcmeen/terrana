@@ -47,6 +47,16 @@ test: ## Run unit + integration tests (offline once the spatial extension is cac
 test-fast: ## Run the tests that never need DuckDB's spatial extension (offline, no cache)
 	cargo test --lib --bins -- --skip ingest_file_loads_and_detects_columns
 
+.PHONY: skills-test
+skills-test: ## Run the agent skills' evals (tests/skills) on Python 3.9, their oldest
+	cargo build
+	uv run --no-project --python 3.9 --with pytest pytest tests/skills -q
+
+.PHONY: skills-lint
+skills-lint: ## Lint and format-check the agent skills' Python
+	uvx ruff check skills tests/skills
+	uvx ruff format --check skills tests/skills
+
 .PHONY: fmt
 fmt: ## Format the code
 	cargo fmt --all
@@ -64,7 +74,7 @@ check: ## Type-check all targets
 	cargo check --all-targets
 
 .PHONY: ci
-ci: fmt-check lint test ## Run the CI gate (fmt + clippy + all tests; offline once cached)
+ci: fmt-check lint test skills-lint skills-test ## Run the CI gate (fmt + clippy + all tests + skill evals; offline once cached)
 
 .PHONY: install
 install: ## Install the terrana binary from this checkout

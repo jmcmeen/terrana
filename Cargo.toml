@@ -23,6 +23,9 @@ exclude = [
     ".github/",
     "testdata/*.py",
     "python/",
+    "skills/",
+    "tests/skills/",
+    "ruff.toml",
 ]
 
 [lib]

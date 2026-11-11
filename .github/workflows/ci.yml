@@ -77,6 +77,11 @@ jobs:
           path: ~/.duckdb/extensions
           key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
       - run: cargo test --all
+      # The agent skills' evals start this build of terrana, so they share the job
+      # (and its cached spatial extension) with the integration tests.
+      - uses: astral-sh/setup-uv@v5
+      - run: make skills-lint
+      - run: make skills-test
       - uses: actions/cache/save@v4
         if: github.ref == 'refs/heads/main'
         with:
