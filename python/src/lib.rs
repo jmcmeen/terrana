@@ -240,7 +240,7 @@ impl TerranaSession {
     ) -> PyResult<()> {
         let state = self.build_state(py, port, &bind, token, cors_origins)?;
         let addr = format!("{}:{}", bind, port);
-        let result: std::io::Result<()> = py.allow_threads(move || {
+        let result: std::io::Result<()> = py.detach(move || {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
                 let shutdown = async {
@@ -268,7 +268,7 @@ impl TerranaSession {
         // Bind here, not on the thread, so a taken port raises OSError instead of
         // leaving the caller with a handle to a server that never started.
         let listener = py
-            .allow_threads(|| {
+            .detach(|| {
                 let l = std::net::TcpListener::bind((bind.as_str(), port))?;
                 l.set_nonblocking(true)?;
                 Ok::<_, std::io::Error>(l)
@@ -329,7 +329,7 @@ impl TerranaSession {
         };
         // May resolve a host name: don't hold the GIL through a slow lookup.
         let has_token = token.is_some();
-        let warning = py.allow_threads(|| middleware::public_bind_warning(bind, has_token));
+        let warning = py.detach(|| middleware::public_bind_warning(bind, has_token));
         if let Some(msg) = warning {
             let msg = std::ffi::CString::new(format!("{msg}. Pass token=...")).map_err(pyerr)?;
             PyErr::warn(py, &py.get_type::<PyRuntimeWarning>(), &msg, 1)?;
@@ -388,7 +388,7 @@ impl TerranaServer {
             let _ = tx.send(());
         }
         if let Some(handle) = self.handle.take() {
-            py.allow_threads(move || {
+            py.detach(move || {
                 let _ = handle.join();
             });
         }
@@ -539,7 +539,7 @@ fn _run_cli(py: Python<'_>) -> PyResult<()> {
 
     // Release the GIL while the server runs so signals and threads behave as they do
     // under the standalone binary.
-    if let Err(e) = py.allow_threads(move || terrana_core::cli::run(args)) {
+    if let Err(e) = py.detach(move || terrana_core::cli::run(args)) {
         // Mirror the binary's failure UX (`Error: …` on stderr, exit code 1) rather
         // than surfacing a Python traceback for an operational error (e.g. missing
         // file). clap already exits the process for `--help`/`--version`/bad args, so
