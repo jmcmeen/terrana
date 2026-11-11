@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: the crate builds with MSVC 14.51 (GitHub's current Windows image). DuckDB 1.5.3's
   bundled `fmt` used `stdext::checked_array_iterator`, which that compiler dropped; `duckdb` is
   now 1.10504.0 (DuckDB 1.5.4), as in the Python bindings (#61)
+- `--watch` sees changes made right after startup. The watcher was registered on its own thread
+  after the server had started answering, so an early change was missed; it is now registered
+  before the server binds, and startup fails if it can't be (#63)
 
 ## [0.2.12] - 2026-11-10
 
